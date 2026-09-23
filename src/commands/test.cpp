@@ -3,6 +3,7 @@
 #include "../core/project.hpp"
 #include "../core/luau/vm.hpp"
 #include "../core/luau/compiler.hpp"
+#include "../core/luau/environment.hpp"
 
 #include <optional>
 #include <iostream>
@@ -41,13 +42,23 @@ int test(int argc, char** argv)
     std::string text = readFile("e.luau");
     std::string_view view = getView(text);
 
-    sonata::luau::VM vm;
-    sonata::luau::Compiler compiler;
+    luau::VM vm;
+    luau::Compiler compiler;
+    
+    luau::Environment env;
+    env.setString("greeting", "Hello, world!");
+    bool loaded = env.load(vm, "greeting");
+
+    if (!loaded)
+    {
+        std::cerr << "Failed to load greeting" << std::endl;
+        return 1;
+    }
 
     // Compile timing
     auto compileStart = clock::now();
 
-    sonata::luau::Bytecode compiled = compiler.compile(view);
+    luau::Bytecode compiled = compiler.compile(view);
 
     auto compileEnd = clock::now();
 
