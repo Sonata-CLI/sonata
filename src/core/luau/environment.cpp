@@ -1,9 +1,13 @@
 #include "environment.hpp"
 
+#include <cstdio>
+#include <new>
 #include <stdexcept>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
+
+#include "lualib.h"
 
 namespace sonata::luau {
 
@@ -49,6 +53,61 @@ int callGlobalFunction(lua_State* L)
         lua_error(L);
         return 0; // unreachable
     }
+}
+
+/*
+ * __gc for every Custom-type userdata: destroys the shared_ptr<void> placed
+ * in the userdata's storage by pushCustom(). This always wins over whatever
+ * a Global::Custom::build() callback set, so build() must not set __gc.
+ */
+int customGC(lua_State* L)
+{
+    auto* slot = static_cast<std::shared_ptr<void>*>(lua_touserdata(L, 1));
+
+    if (slot)
+        slot->~shared_ptr();
+
+    return 0;
+}
+
+/*
+ * Pushes a Custom global: full userdata holding a copy of custom.value,
+ * tagged with a metatable named custom.typeName. The metatable is created
+ * and built (via custom.build) only the first time this typeName is seen
+ * on this particular lua_State; luaL_newmetatable() itself tracks that
+ * through the Lua registry, so repeated pushes of the same type just reuse
+ * it.
+ */
+void pushCustom(lua_State* L, const Global::Custom& custom)
+{
+    auto* slot = static_cast<std::shared_ptr<void>*>(
+        lua_newuserdata(L, sizeof(std::shared_ptr<void>))
+    );
+
+    // Placement-new a copy of the shared_ptr into the userdata: the pushed
+    // Luau value keeps the C++ object alive independently of whatever
+    // Environment/EnvNamespace produced this Global.
+    new (slot) std::shared_ptr<void>(custom.value);
+
+    if (luaL_newmetatable(L, custom.typeName.c_str()))
+    {
+        // First time this type name has been loaded into this lua_State.
+        // Sane OOP default; build() can replace __index if it wants
+        // something else (e.g. a C function for computed properties).
+        lua_pushvalue(L, -1);
+        lua_setfield(L, -2, "__index");
+
+        custom.build(L);
+
+        // These always win over whatever build() did.
+        lua_pushcclosure(L, customGC, nullptr, 0);
+        lua_setfield(L, -2, "__gc");
+
+        lua_pushlstring(L, custom.typeName.data(), custom.typeName.size());
+        lua_setfield(L, -2, "__type");
+    }
+
+    lua_setmetatable(L, -2);
 }
 
 using ActiveNamespaces = std::unordered_set<const EnvNamespace*>;
@@ -138,6 +197,31 @@ void pushGlobal(
                     active
                 );
             }
+            else if constexpr (std::is_same_v<T, Global::Custom>)
+            {
+                if (value.typeName.empty())
+                {
+                    throw std::runtime_error(
+                        "Environment contains a custom global with an empty type name"
+                    );
+                }
+
+                if (!value.build)
+                {
+                    throw std::runtime_error(
+                        "Environment contains a custom global with a null build function"
+                    );
+                }
+
+                if (!value.value)
+                {
+                    throw std::runtime_error(
+                        "Environment contains a custom global with null data"
+                    );
+                }
+
+                pushCustom(L, value);
+            }
         },
         global.value
     );
@@ -202,12 +286,17 @@ void pushNamespace(
     active.erase(&namespace_);
 }
 
+std::string formatIndex(double value)
+{
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.17g", value);
+    return buf;
+}
+
 } // namespace
 
-// ---------------------------------------------------------
-// Global
-// ---------------------------------------------------------
 
+// Global
 Global::Global(Function function)
     : value(function)
 {
@@ -244,10 +333,13 @@ Global::Global(Namespace namespace_)
     }
 }
 
-// ---------------------------------------------------------
-// EnvNamespace
-// ---------------------------------------------------------
+Global::Global(Custom custom)
+    : value(std::move(custom))
+{
+}
 
+
+// EnvNamespace
 EnvNamespace& EnvNamespace::set(
     std::string name,
     Global global
@@ -302,6 +394,17 @@ EnvNamespace& EnvNamespace::setFunction(
     return set(
         std::move(name),
         Global(function)
+    );
+}
+
+EnvNamespace& EnvNamespace::setCustom(
+    std::string name,
+    Global::Custom custom
+)
+{
+    return set(
+        std::move(name),
+        Global(std::move(custom))
     );
 }
 
@@ -403,6 +506,17 @@ Environment& Environment::setBoolean(
     return set(
         std::move(name),
         Global(value)
+    );
+}
+
+Environment& Environment::setCustom(
+    std::string name,
+    Global::Custom custom
+)
+{
+    return set(
+        std::move(name),
+        Global(std::move(custom))
     );
 }
 
@@ -580,6 +694,65 @@ const Environment::Globals& Environment::globals() const noexcept
 Environment::Globals& Environment::globals() noexcept
 {
     return globals_;
+}
+
+
+// DataValue bridge
+Global toGlobal(const DataValue& value)
+{
+    switch (value.kind())
+    {
+        case DataValue::Kind::Boolean:
+            return Global(value.asBoolean());
+
+        case DataValue::Kind::Number:
+            return Global(value.asNumber());
+
+        case DataValue::Kind::String:
+            return Global(value.asString());
+
+        case DataValue::Kind::Table:
+            return Global(std::make_shared<EnvNamespace>(toNamespace(value)));
+
+        case DataValue::Kind::Nil:
+            break;
+    }
+
+    throw std::invalid_argument(
+        "cannot convert a nil DataValue to a Global -- filter Nil entries "
+        "out first (toNamespace() already does this for table fields)"
+    );
+}
+
+EnvNamespace toNamespace(const DataValue& table)
+{
+    EnvNamespace ns;
+    std::size_t nextIndex = 1;
+
+    for (const auto& entry : table.asTable())
+    {
+        if (entry.value.isNil())
+            continue;
+
+        std::string key;
+
+        if (!entry.key)
+        {
+            key = std::to_string(nextIndex++);
+        }
+        else if (entry.key->kind == DataValue::Key::Kind::String)
+        {
+            key = entry.key->string;
+        }
+        else
+        {
+            key = formatIndex(entry.key->number);
+        }
+
+        ns.set(std::move(key), toGlobal(entry.value));
+    }
+
+    return ns;
 }
 
 } // namespace sonata::luau

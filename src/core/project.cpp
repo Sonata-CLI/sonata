@@ -3,13 +3,102 @@
 #include <algorithm>
 #include <stdexcept>
 
+#include "luau/datafile.hpp"
+
 namespace fs = std::filesystem;
 
 namespace sonata {
 
+namespace {
+
+std::string requireString(
+    const luau::DataValue& table,
+    const std::string& key,
+    const fs::path& manifestPath
+)
+{
+    const luau::DataValue* field = table.find(key);
+
+    if (!field || field->isNil())
+    {
+        throw std::runtime_error(
+            manifestPath.string() + ": missing required field '" + key + "'"
+        );
+    }
+
+    if (!field->isString())
+    {
+        throw std::runtime_error(
+            manifestPath.string() + ": field '" + key + "' must be a string"
+        );
+    }
+
+    return field->asString();
+}
+
+std::string optionalString(
+    const luau::DataValue& table,
+    const std::string& key,
+    std::string fallback,
+    const fs::path& manifestPath
+)
+{
+    const luau::DataValue* field = table.find(key);
+
+    if (!field || field->isNil())
+        return fallback;
+
+    if (!field->isString())
+    {
+        throw std::runtime_error(
+            manifestPath.string() + ": field '" + key + "' must be a string"
+        );
+    }
+
+    return field->asString();
+}
+
+std::vector<std::string> optionalStringArray(
+    const luau::DataValue& table,
+    const std::string& key,
+    const fs::path& manifestPath
+)
+{
+    std::vector<std::string> result;
+
+    const luau::DataValue* field = table.find(key);
+
+    if (!field || field->isNil())
+        return result;
+
+    if (!field->isArray())
+    {
+        throw std::runtime_error(
+            manifestPath.string() + ": field '" + key +
+            "' must be a plain array of strings, e.g. { \"a\", \"b\" }"
+        );
+    }
+
+    for (const auto& item : field->items())
+    {
+        if (!item.isString())
+        {
+            throw std::runtime_error(
+                manifestPath.string() + ": every entry in '" + key +
+                "' must be a string"
+            );
+        }
+
+        result.push_back(item.asString());
+    }
+
+    return result;
+}
+
+} // namespace
+
 Project::Project(fs::path root)
     : root_(fs::absolute(std::move(root)).lexically_normal()),
-      entrypoint_(root_ / "main.luau"),
       sonataDir_(root_ / "sonata"),
       projectFile_(sonataDir_ / "project.luau"),
       dependenciesDir_(sonataDir_ / "deps") {
@@ -31,11 +120,14 @@ Project Project::find(const fs::path& start) {
     }
 
     while (!current.empty()) {
-        const fs::path entrypoint = current / "main.luau";
         const fs::path sonataDir = current / "sonata";
+        const fs::path projectFile = sonataDir / "project.luau";
 
-        if (fs::is_regular_file(entrypoint) &&
-            fs::is_directory(sonataDir)) {
+        // The entrypoint filename is configurable (via project.luau), so it
+        // can't be part of this detection heuristic; the manifest itself
+        // is the one thing every Sonata project is guaranteed to have.
+        if (fs::is_directory(sonataDir) &&
+            fs::is_regular_file(projectFile)) {
             return Project::open(current);
         }
 
@@ -67,18 +159,6 @@ void Project::validate() {
         );
     }
 
-    if (!fs::exists(entrypoint_)) {
-        throw std::runtime_error(
-            "Project is missing main.luau: " + entrypoint_.string()
-        );
-    }
-
-    if (!fs::is_regular_file(entrypoint_)) {
-        throw std::runtime_error(
-            "main.luau is not a regular file: " + entrypoint_.string()
-        );
-    }
-
     if (!fs::exists(sonataDir_)) {
         throw std::runtime_error(
             "Project is missing the sonata directory: " + sonataDir_.string()
@@ -90,19 +170,19 @@ void Project::validate() {
             "sonata is not a directory: " + sonataDir_.string()
         );
     }
-    
+
     if (!fs::exists(projectFile_)) {
         throw std::runtime_error(
             "Project is missing project.luau: " + projectFile_.string()
         );
     }
-    
+
     if (!fs::is_regular_file(projectFile_)) {
         throw std::runtime_error(
             "project.luau is not a regular file: " + projectFile_.string()
         );
     }
-    
+
     if (fs::exists(dependenciesDir_) && !fs::is_directory(dependenciesDir_)) {
         throw std::runtime_error(
             "deps is not a directory: " + dependenciesDir_.string()
@@ -117,6 +197,63 @@ void Project::validate() {
     //
     // It will simply report false through the corresponding
     // hasDependenciesDirectory* function.
+
+    loadManifest();
+}
+
+void Project::loadManifest() {
+    luau::DataValue table;
+
+    try {
+        table = luau::DataFile::parseFile(projectFile_);
+    } catch (const std::exception& e) {
+        throw std::runtime_error(
+            "Failed to parse " + projectFile_.string() + ": " + e.what()
+        );
+    }
+
+    if (!table.isTable()) {
+        throw std::runtime_error(
+            projectFile_.string() + " must return a table"
+        );
+    }
+
+    manifest_.name = requireString(table, "name", projectFile_);
+    manifest_.version = optionalString(table, "version", "0.0.0", projectFile_);
+    manifest_.description = optionalString(table, "description", "", projectFile_);
+    manifest_.license = optionalString(table, "license", "", projectFile_);
+    manifest_.authors = optionalStringArray(table, "authors", projectFile_);
+    manifest_.dependencies = optionalStringArray(table, "dependencies", projectFile_);
+    manifest_.entrypoint = optionalString(table, "entrypoint", "main.luau", projectFile_);
+
+    // Resolve + confine the entrypoint to the project root: project.luau
+    // shouldn't be able to point outside of it (e.g. "../../etc/passwd").
+    const fs::path candidate = (root_ / manifest_.entrypoint).lexically_normal();
+    const fs::path relative = candidate.lexically_relative(root_);
+
+    const bool escapesRoot = relative.empty() ||
+        (relative.begin() != relative.end() && *relative.begin() == "..");
+
+    if (escapesRoot) {
+        throw std::runtime_error(
+            projectFile_.string() + ": entrypoint '" + manifest_.entrypoint +
+            "' resolves outside the project root"
+        );
+    }
+
+    entrypoint_ = candidate;
+
+    if (!fs::exists(entrypoint_)) {
+        throw std::runtime_error(
+            "Project is missing its entrypoint: " + entrypoint_.string()
+        );
+    }
+
+    if (!fs::is_regular_file(entrypoint_)) {
+        throw std::runtime_error(
+            "entrypoint is not a regular file: " + entrypoint_.string()
+        );
+    }
 }
 
 const fs::path& Project::root() const noexcept {
@@ -137,6 +274,10 @@ const fs::path& Project::projectFile() const noexcept {
 
 const fs::path& Project::dependenciesDir() const noexcept {
     return dependenciesDir_;
+}
+
+const Project::Manifest& Project::manifest() const noexcept {
+    return manifest_;
 }
 
 bool Project::hasDependenciesDirectory() const noexcept {

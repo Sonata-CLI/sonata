@@ -1,6 +1,5 @@
 #include "init.hpp"
 #include "../core/project.hpp"
-#include "../util/path.hpp"
 
 #include <optional>
 #include <filesystem>
@@ -10,6 +9,80 @@
 #include <string>
 
 namespace fs = std::filesystem;
+
+/*  Argument Parsing:
+    Parses a single positional path argument.
+    Returns std::nullopt if no path was supplied or a path was already specified.
+    Throws no exceptions.    
+*/
+std::optional<fs::path> parse_path_arg(
+    std::string_view arg,
+    bool& pathspecified
+) {
+    if (arg.empty())
+        return std::nullopt;
+
+    if (pathspecified)
+        return std::nullopt;
+
+    pathspecified = true;
+
+    return fs::path(arg);
+}
+
+/*  Validation:
+    Checks wether a path can be safely treated as a directory path.
+    This checks every existing component of the path. If an existing
+    component is a regular file, the path is invalid.
+
+    Non-existent components are also allowed.
+*/
+bool validate_directory_path(
+    const fs::path& path,
+    std::string& error
+) {
+    if (path.empty()) {
+        error = "path is empty";
+        return false;
+    }
+
+    std::error_code ec;
+    fs::path current;
+
+    // Walk through each component instead of only checking
+    // the final path.
+    for (const auto& component : path) {
+        current /= component;
+
+        if (!fs::exists(current, ec)) {
+            if (ec) {
+                error = "could not inspect path '" +
+                        current.string() + "': " +
+                        ec.message();
+                return false;
+            }
+
+            // This component doesn't exist. Everything after it
+            // cannot be an existing file, so we're done checking.
+            break;
+        }
+
+        if (!fs::is_directory(current, ec)) {
+            if (ec) {
+                error = "could not inspect path '" +
+                        current.string() + "': " +
+                        ec.message();
+                return false;
+            }
+
+            error = "path component is not a directory: '" +
+                    current.string() + "'";
+            return false;
+        }
+    }
+
+    return true;
+}
 
 namespace sonata::commands {
 
@@ -40,7 +113,7 @@ int init(int argc, char** argv) {
     
         // Path
         else {
-            auto path = util::parse_path_arg(arg, pathspecified);
+            auto path = parse_path_arg(arg, pathspecified);
 
             if (!path) {
                 std::cerr << "error: unexpected argument " << arg << "\n";
@@ -56,7 +129,7 @@ int init(int argc, char** argv) {
     
     std::string patherror;
     
-    if (!util::validate_directory_path(root, patherror)) {
+    if (!validate_directory_path(root, patherror)) {
         std::cerr << "error: " << patherror << "\n";
         return 1;
     }

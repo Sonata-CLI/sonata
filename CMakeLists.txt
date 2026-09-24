@@ -34,4 +34,5 @@ target_link_libraries(sn
     PRIVATE
         Luau.Compiler
         Luau.VM
+        Luau.Ast
 )
