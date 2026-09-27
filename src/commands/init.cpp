@@ -182,7 +182,7 @@ int init(int argc, char** argv) {
         manifest.set("authors", luau::DataValue::array({}));
         manifest.set("dependencies", luau::DataValue::array({}));
 
-        project << manifest.serialize();
+        project << luau::DataFile::serialize(manifest);
         mainluau << "print('Hello World!')";
         std::cout << "Initialized Sonata project at " << root << "\n";
     } catch (const fs::filesystem_error& error) {
