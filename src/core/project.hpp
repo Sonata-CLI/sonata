@@ -20,7 +20,6 @@ public:
         std::string version;
         std::string description;
         std::vector<std::string> authors;
-        std::string license;
         std::string entrypoint;
         std::vector<std::string> dependencies;
     };

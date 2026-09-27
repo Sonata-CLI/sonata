@@ -1,5 +1,6 @@
 #include "init.hpp"
 #include "../core/project.hpp"
+#include "../core/luau/datafile.hpp"
 
 #include <optional>
 #include <filesystem>
@@ -173,8 +174,15 @@ int init(int argc, char** argv) {
 
         std::ofstream project(sonata / "project.luau");
         std::ofstream mainluau(root / "main.luau");
+        luau::DataValue manifest = luau::DataValue::table();
+        manifest.set("name", "myProject");
+        manifest.set("version", "0.1.0");
+        manifest.set("description", "A new Sonata project");
+        manifest.set("entrypoint", "main.luau");
+        manifest.set("authors", luau::DataValue::array({}));
+        manifest.set("dependencies", luau::DataValue::array({}));
 
-        project << "return {}\n";
+        project << manifest.serialize();
         mainluau << "print('Hello World!')";
         std::cout << "Initialized Sonata project at " << root << "\n";
     } catch (const fs::filesystem_error& error) {
