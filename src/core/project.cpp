@@ -221,7 +221,6 @@ void Project::loadManifest() {
     manifest_.name = requireString(table, "name", projectFile_);
     manifest_.version = optionalString(table, "version", "0.0.0", projectFile_);
     manifest_.description = optionalString(table, "description", "", projectFile_);
-    manifest_.license = optionalString(table, "license", "", projectFile_);
     manifest_.authors = optionalStringArray(table, "authors", projectFile_);
     manifest_.dependencies = optionalStringArray(table, "dependencies", projectFile_);
     manifest_.entrypoint = optionalString(table, "entrypoint", "main.luau", projectFile_);
