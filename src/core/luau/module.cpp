@@ -1,4 +1,5 @@
 #include "module.hpp"
+#include "datafile.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -21,6 +22,7 @@ constexpr const char* kCacheKey = "sonata.modules";
 
 constexpr const char* kSourceExtension = ".luau";
 constexpr const char* kInitFile = "init.luau";
+constexpr const char* kProjectFile = "project.luau";
 
 bool startsWith(std::string_view text, std::string_view prefix) {
     return text.size() >= prefix.size() &&
@@ -466,12 +468,39 @@ bool ModuleLoader::resolve(
         return false;
     }
 
-    // Candidates: <base>.luau and <base>/init.luau.
+    // Candidates: <base>.luau and <base>/init.luau (or <base>/<entrypoint> from project.luau).
     const std::string& base = *normalized;
     const bool atRoot = base.back() == '/'; // "/" or "C:/" can't have a ".luau" sibling
 
     const std::string asFile = base + kSourceExtension;
-    const std::string asInit = atRoot ? base + kInitFile : base + "/" + kInitFile;
+    
+    // asInit is no longer const so we can overwrite it if sonata/project.luau provides a valid override
+    std::string asInit = atRoot ? base + kInitFile : base + "/" + kInitFile;
+
+    // --- ENTRYPOINT LOGIC ---
+    const std::string projectFilePath = atRoot ? base + ".sonata/project.luau" : base + "/.sonata/project.luau";
+
+    if (source_->exists(projectFilePath)) {
+        DataValue projectData = DataFile::parseFile(std::filesystem::path(projectFilePath));
+        std::string entrypoint = projectData.find("entrypoint") ? projectData.find("entrypoint")->asString() : "";
+
+        if (!entrypoint.empty()) {
+            // Check if the entrypoint ends with the kSourceExtension
+            std::string_view ext(kSourceExtension);
+            bool endsWithExt = entrypoint.size() >= ext.size() && 
+                               entrypoint.compare(entrypoint.size() - ext.size(), ext.size(), ext) == 0;
+
+            if (endsWithExt) {
+                std::string entrypointPath = atRoot ? base + entrypoint : base + "/" + entrypoint;
+
+                // Make sure the file specified actually exists before committing to it
+                if (source_->exists(entrypointPath)) {
+                    asInit = entrypointPath; // Successfully swap kInitFile for the custom entrypoint
+                }
+            }
+        }
+    }
+    // ---------------------------------------
 
     const bool fileExists = !atRoot && source_->exists(asFile);
     const bool initExists = source_->exists(asInit);

@@ -31,7 +31,7 @@ public:
  *
  * "sn run"   uses the real absolute paths on disk.
  * "sn build" uses the same tree under a virtual root: /main.luau,
- *            /src/util.luau, /sonata/deps/foo/init.luau, ...
+ *            /src/util.luau, /.sonata/deps/foo/init.luau, ...
  */
 
 /*
@@ -127,7 +127,7 @@ public:
      * Registers "@name" as an alias for a directory (a module path).
      * Throws std::invalid_argument if the name or path is invalid.
      *
-     * For dependencies: addAlias("foo", ".../sonata/deps/foo").
+     * For dependencies: addAlias("foo", ".../.sonata/deps/foo").
      */
     void addAlias(std::string name, std::string_view directory);
 

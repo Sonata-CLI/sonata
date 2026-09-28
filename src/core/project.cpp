@@ -99,7 +99,7 @@ std::vector<std::string> optionalStringArray(
 
 Project::Project(fs::path root)
     : root_(fs::absolute(std::move(root)).lexically_normal()),
-      sonataDir_(root_ / "sonata"),
+      sonataDir_(root_ / ".sonata"),
       projectFile_(sonataDir_ / "project.luau"),
       dependenciesDir_(sonataDir_ / "deps") {
 }
@@ -120,7 +120,7 @@ Project Project::find(const fs::path& start) {
     }
 
     while (!current.empty()) {
-        const fs::path sonataDir = current / "sonata";
+        const fs::path sonataDir = current / ".sonata";
         const fs::path projectFile = sonataDir / "project.luau";
 
         // The entrypoint filename is configurable (via project.luau), so it
@@ -189,11 +189,11 @@ void Project::validate() {
         );
     }
 
-    // The sonata/deps/ folder is optional.
+    // The .sonata/deps/ folder is optional.
     //
     // project/
     // ├── main.luau
-    // └── sonata/
+    // └── .sonata/
     //
     // It will simply report false through the corresponding
     // hasDependenciesDirectory* function.
@@ -291,7 +291,7 @@ std::vector<fs::path> Project::sourceFiles() const {
     }
 
     for (const auto& entry : fs::recursive_directory_iterator(root_)) {
-        // Don't search inside sonata/.
+        // Don't search inside .sonata/.
         //
         // This is important because dependencies may themselves contain
         // Luau files, and those shouldn't automatically become part of

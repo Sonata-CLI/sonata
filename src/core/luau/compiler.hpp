@@ -53,4 +53,4 @@ class Compiler {
 public:
     Bytecode compile(std::string_view source) const;
 };
-}
+} // namespace sonata::luau

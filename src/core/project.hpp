@@ -9,7 +9,7 @@ namespace sonata {
 class Project {
 public:
     /*
-     * Parsed contents of sonata/project.luau.
+     * Parsed contents of .sonata/project.luau.
      *
      * "entrypoint" is stored exactly as written in the manifest (e.g.
      * "main.luau" or "src/init.luau"); Project::entrypoint() gives you the
@@ -28,7 +28,7 @@ public:
      * Open a Sonata project from a directory.
      *
      * The directory must contain:
-     *   sonata/project.luau
+     *   .sonata/project.luau
      *   <entrypoint>            (as named by project.luau; "main.luau" if
      *                            the manifest doesn't specify one)
      *
@@ -41,7 +41,7 @@ public:
      * Find and open a project starting from a path.
      *
      * If the path is a file, its parent directory is used.
-     * The directory and its parents are searched for sonata/project.luau.
+     * The directory and its parents are searched for .sonata/project.luau.
      */
     static Project find(const std::filesystem::path& start);
 
@@ -56,7 +56,7 @@ public:
     /**
      * Return all .luau source files in the project root.
      *
-     * Files inside the sonata directory are excluded.
+     * Files inside the .sonata directory are excluded.
      */
     std::vector<std::filesystem::path> sourceFiles() const;
 

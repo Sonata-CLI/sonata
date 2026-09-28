@@ -24,7 +24,7 @@ namespace sonata::luau {
  * DataFile::serialize()/save().
  *
  * This type has nothing project-specific about it; Project uses it to read
- * sonata/project.luau, but it's just as suited to any other "config as
+ * .sonata/project.luau, but it's just as suited to any other "config as
  * Luau" file.
  */
 class DataValue {

@@ -146,7 +146,7 @@ int init(int argc, char** argv) {
         }
     }
 
-    fs::path sonata = root / "sonata";
+    fs::path sonata = root / ".sonata";
     
     if (validate) {
         std::optional<sonata::Project> project;
@@ -163,9 +163,7 @@ int init(int argc, char** argv) {
         }
         std::cout << "success\n";
         std::cout << "project root: " << project->root() << "\n";
-        std::cout << "sonataDir: " << project->sonataDir() << "\n";
-        std::cout << "entry point: " << project->entrypoint() << "\n";
-        std::cout << "has dependency folder: " << std::boolalpha << project->hasDependenciesDirectory() << "\n";
+        std::cout << "project manifest: " << luau::DataFile::parseFile(project->projectFile()).serialize() << "\n";
         return 0;
     }
     
