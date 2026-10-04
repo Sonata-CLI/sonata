@@ -1,9 +1,12 @@
-#include "project.hpp"
-
 #include <algorithm>
 #include <stdexcept>
+#include <string>
+#include <system_error>
+#include <unordered_set>
+#include <utility>
 
-#include "luau/datafile.hpp"
+#include <sonata/core/luau/datafile.hpp>
+#include <sonata/core/project.hpp>
 
 namespace fs = std::filesystem;
 
@@ -11,10 +14,15 @@ namespace sonata {
 
 namespace {
 
+// Manifest reading
+//
+// "where" is a prefix for error messages: the manifest path, optionally
+// followed by the location inside it (e.g. "<path>: dependencies[2]").
+
 std::string requireString(
     const luau::DataValue& table,
     const std::string& key,
-    const fs::path& manifestPath
+    const std::string& where
 )
 {
     const luau::DataValue* field = table.find(key);
@@ -22,14 +30,14 @@ std::string requireString(
     if (!field || field->isNil())
     {
         throw std::runtime_error(
-            manifestPath.string() + ": missing required field '" + key + "'"
+            where + ": missing required field '" + key + "'"
         );
     }
 
     if (!field->isString())
     {
         throw std::runtime_error(
-            manifestPath.string() + ": field '" + key + "' must be a string"
+            where + ": field '" + key + "' must be a string"
         );
     }
 
@@ -40,7 +48,7 @@ std::string optionalString(
     const luau::DataValue& table,
     const std::string& key,
     std::string fallback,
-    const fs::path& manifestPath
+    const std::string& where
 )
 {
     const luau::DataValue* field = table.find(key);
@@ -51,7 +59,7 @@ std::string optionalString(
     if (!field->isString())
     {
         throw std::runtime_error(
-            manifestPath.string() + ": field '" + key + "' must be a string"
+            where + ": field '" + key + "' must be a string"
         );
     }
 
@@ -61,7 +69,7 @@ std::string optionalString(
 std::vector<std::string> optionalStringArray(
     const luau::DataValue& table,
     const std::string& key,
-    const fs::path& manifestPath
+    const std::string& where
 )
 {
     std::vector<std::string> result;
@@ -74,7 +82,7 @@ std::vector<std::string> optionalStringArray(
     if (!field->isArray())
     {
         throw std::runtime_error(
-            manifestPath.string() + ": field '" + key +
+            where + ": field '" + key +
             "' must be a plain array of strings, e.g. { \"a\", \"b\" }"
         );
     }
@@ -84,8 +92,7 @@ std::vector<std::string> optionalStringArray(
         if (!item.isString())
         {
             throw std::runtime_error(
-                manifestPath.string() + ": every entry in '" + key +
-                "' must be a string"
+                where + ": every entry in '" + key + "' must be a string"
             );
         }
 
@@ -95,8 +102,273 @@ std::vector<std::string> optionalStringArray(
     return result;
 }
 
+std::vector<Project::Dependency> optionalDependencies(
+    const luau::DataValue& table,
+    const std::string& where
+)
+{
+    std::vector<Project::Dependency> result;
+
+    const luau::DataValue* field = table.find("dependencies");
+
+    if (!field || field->isNil())
+        return result;
+
+    if (!field->isArray())
+    {
+        throw std::runtime_error(
+            where + ": field 'dependencies' must be a plain array of tables, "
+            "e.g. { { name = \"foo\", url = \"https://...\", ref = \"v1.0\" } }"
+        );
+    }
+
+    std::unordered_set<std::string> seen;
+    std::size_t index = 0;
+
+    for (const auto& item : field->items())
+    {
+        ++index; // Luau arrays are 1-based, so report them that way.
+
+        const std::string entryWhere =
+            where + ": dependencies[" + std::to_string(index) + "]";
+
+        if (!item.isTable())
+        {
+            throw std::runtime_error(
+                entryWhere +
+                " must be a table with 'name', 'url' and an optional 'ref'"
+            );
+        }
+
+        Project::Dependency dependency;
+        dependency.name = requireString(item, "name", entryWhere);
+        dependency.url = requireString(item, "url", entryWhere);
+        dependency.ref = optionalString(item, "ref", "", entryWhere);
+
+        if (const auto problem = dependency.validationError())
+            throw std::runtime_error(entryWhere + ": " + *problem);
+
+        if (!seen.insert(dependency.name).second)
+        {
+            throw std::runtime_error(
+                entryWhere + ": duplicate dependency name '" +
+                dependency.name + "'"
+            );
+        }
+
+        result.push_back(std::move(dependency));
+    }
+
+    return result;
+}
+
+// Manifest writing
+void addEntry(
+    luau::DataValue::Entries& entries,
+    const char* key,
+    luau::DataValue value
+)
+{
+    entries.push_back(luau::DataValue::Entry{
+        luau::DataValue::Key::ofString(key),
+        std::move(value)
+    });
+}
+
+luau::DataValue stringArray(const std::vector<std::string>& strings)
+{
+    std::vector<luau::DataValue> values;
+    values.reserve(strings.size());
+
+    for (const auto& s : strings)
+        values.emplace_back(s);
+
+    return luau::DataValue::array(std::move(values));
+}
+
+luau::DataValue dependencyTable(const Project::Dependency& dependency)
+{
+    luau::DataValue::Entries entries;
+
+    addEntry(entries, "name", dependency.name);
+    addEntry(entries, "url", dependency.url);
+
+    if (!dependency.ref.empty())
+        addEntry(entries, "ref", dependency.ref);
+
+    return luau::DataValue(std::move(entries));
+}
+
+// Keys that saveManifest() regenerates from Manifest. Anything else already
+// in the file is carried over untouched.
+bool isManagedKey(const std::string& key)
+{
+    return key == "name" || key == "version" || key == "description" ||
+           key == "authors" || key == "entrypoint" || key == "dependencies";
+}
+
+// Dependency validation helpers
+
+bool isControlChar(char c) noexcept
+{
+    const auto u = static_cast<unsigned char>(c);
+    return u < 0x20 || u == 0x7F;
+}
+
+bool containsControlChar(const std::string& s) noexcept
+{
+    return std::any_of(s.begin(), s.end(), isControlChar);
+}
+
+bool isAsciiDigit(char c) noexcept
+{
+    return c >= '0' && c <= '9';
+}
+
+// Deliberately ASCII-only and locale-independent (unlike std::isalnum).
+bool isIdentifierChar(char c) noexcept
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           isAsciiDigit(c) || c == '_';
+}
+
+char toLowerAscii(char c) noexcept
+{
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+}
+
+// These deliberately don't echo the offending value: it may contain control
+// characters, and this text ends up in terminals and logs.
+
+std::optional<std::string> nameError(const std::string& name)
+{
+    if (name.empty())
+        return "name must not be empty";
+
+    if (!std::all_of(name.begin(), name.end(), isIdentifierChar))
+        return "name may only contain letters, digits and underscores";
+
+    if (isAsciiDigit(name.front()))
+        return "name must not start with a digit";
+
+    return std::nullopt;
+}
+
+std::optional<std::string> urlError(const std::string& url)
+{
+    if (url.empty())
+        return "url must not be empty";
+
+    if (url.front() == '-')
+        return "url must not start with '-'";
+
+    if (containsControlChar(url))
+        return "url must not contain control characters";
+
+    return std::nullopt;
+}
+
+std::optional<std::string> refError(const std::string& ref)
+{
+    // The ref is optional; empty means "not specified".
+    if (ref.empty())
+        return std::nullopt;
+
+    if (ref.front() == '-')
+        return "ref must not start with '-'";
+
+    if (containsControlChar(ref))
+        return "ref must not contain control characters";
+
+    if (ref.find("..") != std::string::npos)
+        return "ref must not contain '..'";
+
+    if (ref.find_first_of(" ~^:?*[\\") != std::string::npos)
+    {
+        return "ref must not contain spaces or any of the characters "
+               "~ ^ : ? * [ \\";
+    }
+
+    return std::nullopt;
+}
+
 } // namespace
 
+// Project::Dependency
+std::optional<std::string> Project::Dependency::validationError() const {
+    if (auto problem = nameError(name))
+        return problem;
+
+    if (auto problem = urlError(url))
+        return problem;
+
+    return refError(ref);
+}
+
+void Project::Dependency::validate() const {
+    if (const auto problem = validationError())
+        throw std::invalid_argument("Invalid dependency: " + *problem);
+}
+
+bool Project::Dependency::sameSource(const Dependency& other) const {
+    return ref == other.ref && normalizeUrl(url) == normalizeUrl(other.url);
+}
+
+std::string Project::Dependency::normalizeUrl(std::string url) {
+    const auto isSpace = [](char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    };
+
+    while (!url.empty() && isSpace(url.back())) {
+        url.pop_back();
+    }
+    url.erase(url.begin(), std::find_if_not(url.begin(), url.end(), isSpace));
+
+    const auto stripTrailingSlashes = [&url] {
+        while (!url.empty() && url.back() == '/') {
+            url.pop_back();
+        }
+    };
+
+    stripTrailingSlashes();
+
+    if (url.size() > 4 && url.compare(url.size() - 4, 4, ".git") == 0) {
+        url.resize(url.size() - 4);
+        stripTrailingSlashes();
+    }
+
+    // The scheme and host are case-insensitive. The path (and any
+    // "user@" part) is not, so those are left alone.
+    const std::size_t schemeEnd = url.find("://");
+
+    if (schemeEnd != std::string::npos) {
+        const std::size_t authorityStart = schemeEnd + 3;
+
+        std::size_t authorityEnd = url.find('/', authorityStart);
+        if (authorityEnd == std::string::npos) {
+            authorityEnd = url.size();
+        }
+
+        // Skip over "user[:password]@" if there is one.
+        std::size_t hostStart = authorityStart;
+        const std::size_t at = url.find('@', authorityStart);
+        if (at != std::string::npos && at < authorityEnd) {
+            hostStart = at + 1;
+        }
+
+        for (std::size_t i = 0; i < schemeEnd; ++i) {
+            url[i] = toLowerAscii(url[i]);
+        }
+
+        for (std::size_t i = hostStart; i < authorityEnd; ++i) {
+            url[i] = toLowerAscii(url[i]);
+        }
+    }
+
+    return url;
+}
+
+// Project
 Project::Project(fs::path root)
     : root_(fs::absolute(std::move(root)).lexically_normal()),
       sonataDir_(root_ / ".sonata"),
@@ -202,28 +474,28 @@ void Project::validate() {
 }
 
 void Project::loadManifest() {
+    const std::string where = projectFile_.string();
+
     luau::DataValue table;
 
     try {
         table = luau::DataFile::parseFile(projectFile_);
     } catch (const std::exception& e) {
         throw std::runtime_error(
-            "Failed to parse " + projectFile_.string() + ": " + e.what()
+            "Failed to parse " + where + ": " + e.what()
         );
     }
 
     if (!table.isTable()) {
-        throw std::runtime_error(
-            projectFile_.string() + " must return a table"
-        );
+        throw std::runtime_error(where + " must return a table");
     }
 
-    manifest_.name = requireString(table, "name", projectFile_);
-    manifest_.version = optionalString(table, "version", "0.0.0", projectFile_);
-    manifest_.description = optionalString(table, "description", "", projectFile_);
-    manifest_.authors = optionalStringArray(table, "authors", projectFile_);
-    manifest_.dependencies = optionalStringArray(table, "dependencies", projectFile_);
-    manifest_.entrypoint = optionalString(table, "entrypoint", "main.luau", projectFile_);
+    manifest_.name = requireString(table, "name", where);
+    manifest_.version = optionalString(table, "version", "0.0.0", where);
+    manifest_.description = optionalString(table, "description", "", where);
+    manifest_.authors = optionalStringArray(table, "authors", where);
+    manifest_.dependencies = optionalDependencies(table, where);
+    manifest_.entrypoint = optionalString(table, "entrypoint", "main.luau", where);
 
     // Resolve + confine the entrypoint to the project root: project.luau
     // shouldn't be able to point outside of it (e.g. "../../etc/passwd").
@@ -235,7 +507,7 @@ void Project::loadManifest() {
 
     if (escapesRoot) {
         throw std::runtime_error(
-            projectFile_.string() + ": entrypoint '" + manifest_.entrypoint +
+            where + ": entrypoint '" + manifest_.entrypoint +
             "' resolves outside the project root"
         );
     }
@@ -253,6 +525,158 @@ void Project::loadManifest() {
             "entrypoint is not a regular file: " + entrypoint_.string()
         );
     }
+}
+
+void Project::saveManifest() const {
+    // Never write something open() would refuse to load.
+    std::unordered_set<std::string> names;
+
+    for (const Dependency& dependency : manifest_.dependencies) {
+        dependency.validate();
+
+        if (!names.insert(dependency.name).second) {
+            throw std::invalid_argument(
+                "Duplicate dependency name: " + dependency.name
+            );
+        }
+    }
+
+    luau::DataValue::Entries entries;
+
+    addEntry(entries, "name", manifest_.name);
+    addEntry(entries, "version", manifest_.version);
+
+    if (!manifest_.description.empty()) {
+        addEntry(entries, "description", manifest_.description);
+    }
+
+    if (!manifest_.authors.empty()) {
+        addEntry(entries, "authors", stringArray(manifest_.authors));
+    }
+
+    addEntry(entries, "entrypoint", manifest_.entrypoint);
+
+    if (!manifest_.dependencies.empty()) {
+        std::vector<luau::DataValue> items;
+        items.reserve(manifest_.dependencies.size());
+
+        for (const Dependency& dependency : manifest_.dependencies) {
+            items.push_back(dependencyTable(dependency));
+        }
+
+        addEntry(entries, "dependencies", luau::DataValue::array(std::move(items)));
+    }
+
+    // Carry over anything in the existing file that we don't manage, so
+    // saving doesn't silently drop keys other tools (or the user) added.
+    if (fs::exists(projectFile_)) {
+        luau::DataValue existing;
+
+        try {
+            existing = luau::DataFile::parseFile(projectFile_);
+        } catch (const std::exception& e) {
+            throw std::runtime_error(
+                "Refusing to overwrite " + projectFile_.string() +
+                ", it can't be parsed: " + e.what()
+            );
+        }
+
+        for (const auto& entry : existing.asTable()) {
+            const bool managed =
+                entry.key &&
+                entry.key->kind == luau::DataValue::Key::Kind::String &&
+                isManagedKey(entry.key->string);
+
+            if (!managed) {
+                entries.push_back(entry);
+            }
+        }
+    }
+
+    const luau::DataValue table(std::move(entries));
+
+    // Write to a sibling temp file and rename over the real one, so a
+    // failure part-way through can't leave a truncated manifest behind.
+    fs::path temp = projectFile_;
+    temp += ".tmp";
+
+    try {
+        luau::DataFile::save(table, temp);
+        fs::rename(temp, projectFile_);
+    } catch (const std::exception& e) {
+        std::error_code ignored;
+        fs::remove(temp, ignored);
+
+        throw std::runtime_error(
+            "Failed to write " + projectFile_.string() + ": " + e.what()
+        );
+    }
+}
+
+const Project::Dependency* Project::findDependency(
+    const std::string& name
+) const noexcept {
+    const auto it = std::find_if(
+        manifest_.dependencies.begin(),
+        manifest_.dependencies.end(),
+        [&](const Dependency& d) { return d.name == name; }
+    );
+
+    return it == manifest_.dependencies.end() ? nullptr : &*it;
+}
+
+bool Project::addDependency(Dependency dependency) {
+    dependency.validate();
+
+    auto& deps = manifest_.dependencies;
+    const std::vector<Dependency> previous = deps;
+
+    const auto it = std::find_if(
+        deps.begin(), deps.end(),
+        [&](const Dependency& d) { return d.name == dependency.name; }
+    );
+
+    const bool replaced = it != deps.end();
+
+    if (replaced) {
+        *it = std::move(dependency);
+    } else {
+        deps.push_back(std::move(dependency));
+    }
+
+    try {
+        saveManifest();
+    } catch (...) {
+        deps = previous;
+        throw;
+    }
+
+    return replaced;
+}
+
+bool Project::removeDependency(const std::string& name) {
+    auto& deps = manifest_.dependencies;
+
+    const auto it = std::find_if(
+        deps.begin(), deps.end(),
+        [&](const Dependency& d) { return d.name == name; }
+    );
+
+    if (it == deps.end()) {
+        return false;
+    }
+
+    const std::vector<Dependency> previous = deps;
+    deps.erase(it);
+
+    try {
+        saveManifest();
+    } catch (...) {
+        deps = previous;
+        throw;
+    }
+
+    return true;
 }
 
 const fs::path& Project::root() const noexcept {
@@ -279,6 +703,10 @@ const Project::Manifest& Project::manifest() const noexcept {
     return manifest_;
 }
 
+Project::Manifest& Project::manifest() noexcept {
+    return manifest_;
+}
+
 bool Project::hasDependenciesDirectory() const noexcept {
     return fs::is_directory(dependenciesDir_);
 }
@@ -290,13 +718,21 @@ std::vector<fs::path> Project::sourceFiles() const {
         return files;
     }
 
-    for (const auto& entry : fs::recursive_directory_iterator(root_)) {
+    for (auto it = fs::recursive_directory_iterator(root_);
+         it != fs::recursive_directory_iterator();
+         ++it) {
+        const fs::directory_entry& entry = *it;
+
         // Don't search inside .sonata/.
         //
         // This is important because dependencies may themselves contain
         // Luau files, and those shouldn't automatically become part of
         // the project's source tree.
+        //
+        // (Merely `continue`-ing isn't enough: the iterator would still
+        // descend into the directory on the next increment.)
         if (entry.is_directory() && entry.path() == sonataDir_) {
+            it.disable_recursion_pending();
             continue;
         }
 

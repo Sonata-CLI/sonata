@@ -6,9 +6,9 @@
 #include <utility>
 #include <variant>
 
-#include "datafile.hpp"
+#include <sonata/core/luau/datafile.hpp>
 #include "lualib.h"
-#include "vm.hpp"
+#include <sonata/core/luau/vm.hpp>
 
 namespace sonata::luau {
 

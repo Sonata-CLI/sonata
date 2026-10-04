@@ -1,10 +1,9 @@
-#include "datafile.hpp"
-
 #include <cctype>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
 
+#include <sonata/core/luau/datafile.hpp>
 #include "Luau/Allocator.h"
 #include "Luau/Ast.h"
 #include "Luau/Parser.h"

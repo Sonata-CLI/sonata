@@ -1,11 +1,8 @@
 #include <fstream>
 #include <stdexcept>
 
-#include "compiler.hpp"
-
-#include "lua.h"
+#include <sonata/core/luau/compiler.hpp>
 #include "Luau/Compiler.h"
-#include "Luau/BytecodeBuilder.h"
 
 namespace sonata::luau {
 
@@ -109,7 +106,7 @@ Bytecode Compiler::compile(std::string_view source) const
 {
     Luau::CompileOptions coptions;
     Luau::ParseOptions poptions;
-    //source, CompileOptions, ParseOptions, BytecodeEncoder
+    //source, CompileOptions, ParseOptions
     std::string bytecode = Luau::compile(
         std::string(source),
         coptions,

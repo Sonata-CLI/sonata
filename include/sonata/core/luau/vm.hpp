@@ -1,7 +1,7 @@
 #pragma once
 
 #include "lua.h"
-#include "compiler.hpp"
+#include <sonata/core/luau/compiler.hpp>
 
 namespace sonata::luau {
 	

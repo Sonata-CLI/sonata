@@ -6,9 +6,6 @@
 #include <string>
 #include <vector>
 
-#include "Luau/Compiler.h"
-#include "lua.h"
-
 struct lua_State;
 
 namespace sonata::luau {

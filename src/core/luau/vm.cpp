@@ -1,11 +1,7 @@
-#include "vm.hpp"
-#include "compiler.hpp"
+#include <sonata/core/luau/vm.hpp>
+#include <sonata/core/luau/compiler.hpp>
 #include "lua.h"
 #include "lualib.h"
-#include "luacode.h"
-
-#include <string>
-#include <iostream>
 
 namespace sonata::luau {
 

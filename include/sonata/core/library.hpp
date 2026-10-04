@@ -1,0 +1,82 @@
+#pragma once
+
+#include <cstddef>
+#include <map>
+#include <string>
+#include <string_view>
+#include <vector>
+
+struct lua_State;
+
+namespace sonata::luau {
+
+// Built-in libraries
+// ------------------
+// A built-in library is a Luau module implemented in C++ and shipped inside
+// sonata itself. Scripts import it through the reserved "@sonata" alias:
+//
+//     local path = require("@sonata/path")
+//
+// They need no files on disk and no entry in project.luau.
+//
+// To write one:
+//   1. Write the functions as plain lua_CFunctions.
+//   2. Write an "opener" that pushes the module's value (normally a table).
+//   3. Add it to registerBuiltinLibraries() in library.cpp.
+//
+// See src/core/libs/path.cpp for a complete example.
+
+// A function exposed to Luau. "name" is both its key in the library table and
+// the name shown in error messages and stack traces.
+struct NativeFunction {
+    const char* name;
+    int (*function)(lua_State* L);
+};
+
+// Called the first time a script requires the library.
+//
+// It must push exactly one value on the stack, which becomes the value of
+// require(...). The loader caches that value, so the opener runs once per VM.
+// If the value is a table, the loader marks it read-only (nested tables are up
+// to the opener).
+//
+// Raising a Lua error (luaL_error) from an opener is fine: the require fails
+// with that message. Don't let C++ exceptions escape it.
+using NativeOpener = void (*)(lua_State* L);
+
+struct NativeLibrary {
+    // "path" makes the library available as require("@sonata/path").
+    // Lowercase letters, digits, '_' and '-' only.
+    std::string name;
+    NativeOpener open = nullptr;
+};
+
+// Sets every function in "functions" as a field of the table on top of the stack.
+void setFunctions(lua_State* L, const NativeFunction* functions, std::size_t count);
+
+template <std::size_t N>
+void setFunctions(lua_State* L, const NativeFunction (&functions)[N]) {
+    setFunctions(L, functions, N);
+}
+
+// The set of libraries a ModuleLoader can serve.
+class LibraryRegistry {
+public:
+    // Throws std::invalid_argument for a bad name, a missing opener, or a name
+    // that is already taken.
+    void add(NativeLibrary library);
+
+    // nullptr if there is no library called "name".
+    const NativeLibrary* find(std::string_view name) const;
+
+    // All registered names, sorted. Used for error messages.
+    std::vector<std::string> names() const;
+
+private:
+    std::map<std::string, NativeLibrary, std::less<>> libraries_;
+};
+
+// Adds every library that ships with sonata. ModuleLoader calls this itself.
+void registerBuiltinLibraries(LibraryRegistry& registry);
+
+} // namespace sonata::luau

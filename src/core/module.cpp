@@ -1,13 +1,15 @@
-#include "module.hpp"
-#include "datafile.hpp"
-
 #include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <string_view>
 
+#include <sonata/core/library.hpp>
+#include <sonata/core/module.hpp>
+#include <sonata/core/luau/datafile.hpp>
+#include <sonata/core/project.hpp>
 #include "lua.h"
 #include "lualib.h"
 
@@ -24,15 +26,79 @@ constexpr const char* kSourceExtension = ".luau";
 constexpr const char* kInitFile = "init.luau";
 constexpr const char* kProjectFile = "project.luau";
 
+// Relative to a package root. Same layout as Project / PackageManager.
+constexpr const char* kManifestPath = ".sonata/project.luau";
+constexpr const char* kDependenciesPath = ".sonata/deps";
+
+// Built-in (C++) libraries are imported as require("@sonata/<name>"). The
+// "sonata" alias is reserved for them: addAlias() refuses it, and a dependency
+// with that name is never consulted (the built-in lookup comes first).
+constexpr std::string_view kBuiltinAlias = "sonata";
+constexpr std::string_view kBuiltinPrefix = "@sonata/";
+
 bool startsWith(std::string_view text, std::string_view prefix) {
     return text.size() >= prefix.size() &&
            text.compare(0, prefix.size(), prefix) == 0;
+}
+
+bool endsWith(std::string_view text, std::string_view suffix) {
+    return text.size() >= suffix.size() &&
+           text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
 // "/a/b/c.luau" -> "/a/b". "/c.luau" -> "" (callers append '/' themselves)
 std::string_view directoryOf(std::string_view path) {
     const std::size_t slash = path.rfind('/');
     return slash == std::string_view::npos ? std::string_view{} : path.substr(0, slash);
+}
+
+// "/a/b" + "c" -> "/a/b/c", "/" + "c" -> "/c". "directory" is a normalised path.
+std::string join(const std::string& directory, std::string_view name) {
+    std::string result = directory;
+    if (result.empty() || result.back() != '/') {
+        result += '/';
+    }
+    result += name;
+    return result;
+}
+
+// The folder (or file) containing "path", in normalised form:
+//   "/a/b" -> "/a"    "/a" -> "/"    "C:/a" -> "C:/"
+// std::nullopt if "path" is already a root ("/" or "C:/").
+std::optional<std::string> parentDirectory(const std::string& path) {
+    if (path.empty() || path.back() == '/') {
+        return std::nullopt;
+    }
+
+    const std::size_t slash = path.rfind('/');
+    if (slash == std::string::npos) {
+        return std::nullopt;
+    }
+
+    std::string parent = path.substr(0, slash);
+    const bool driveLetter = parent.size() == 2 && parent[1] == ':' &&
+                             std::isalpha(static_cast<unsigned char>(parent[0]));
+
+    if (parent.empty() || driveLetter) {
+        parent += '/';
+    }
+
+    return parent;
+}
+
+// Where the dependencies of the package at "packageRoot" are installed.
+//
+// Everything is installed flat in the root project's .sonata/deps, so a package
+// that is itself sitting in a deps folder finds its dependencies right next to
+// itself. Any other package is the root project, and has its own deps folder.
+std::string dependenciesDirectoryOf(const std::string& packageRoot) {
+    const std::string layout = std::string("/") + kDependenciesPath;
+
+    if (const auto parent = parentDirectory(packageRoot); parent && endsWith(*parent, layout)) {
+        return *parent;
+    }
+
+    return join(packageRoot, kDependenciesPath);
 }
 
 // Keeps "loading_" accurate even when we leave a function early.
@@ -170,6 +236,85 @@ int launch(lua_State* L, const std::string& path, const Bytecode& bytecode, lua_
     return lua_resume(thread, L, 0);
 }
 
+// "@sonata" or "@sonata/<anything>"
+bool isBuiltinRequest(std::string_view request) {
+    return request == "@sonata" || startsWith(request, kBuiltinPrefix);
+}
+
+// "@sonata/path" -> "path". Empty for "@sonata" and "@sonata/".
+std::string_view builtinName(std::string_view request) {
+    return request.size() > kBuiltinPrefix.size() ? request.substr(kBuiltinPrefix.size()) : std::string_view{};
+}
+
+// Runs a library's opener. Called through lua_pcall so a library that raises
+// an error fails the require() instead of tearing through the loader.
+//
+// Stack on entry: [library (lightuserdata)]. Returns the module value.
+int openLibrary(lua_State* L) {
+    const auto* library = static_cast<const NativeLibrary*>(lua_tolightuserdata(L, 1));
+
+    const int before = lua_gettop(L);
+    library->open(L);
+
+    if (lua_gettop(L) != before + 1) {
+        luaL_error(L, "the opener of built-in library '%s' must push exactly one value", library->name.c_str());
+    }
+
+    // Scripts must not be able to overwrite path.join and friends.
+    if (lua_istable(L, -1)) {
+        lua_setreadonly(L, -1, true);
+    }
+
+    return 1;
+}
+
+// require("@sonata/<name>"). Same contract as requireModule(): pushes the
+// value and returns 1, or pushes an error value and returns -1.
+int requireBuiltin(lua_State* L, const LibraryRegistry& libraries, std::string_view request) {
+    const std::string_view name = builtinName(request);
+
+    if (name.empty()) {
+        return failWithLocation(L, "require '" + std::string(request) + "' is missing a library name (expected '@sonata/<name>')");
+    }
+
+    const NativeLibrary* library = libraries.find(name);
+    if (library == nullptr) {
+        std::string error = "unknown built-in library '" + std::string(request) + "'";
+
+        const std::vector<std::string> available = libraries.names();
+        for (std::size_t i = 0; i < available.size(); ++i) {
+            error += (i == 0) ? " (available: " : ", ";
+            error += available[i];
+        }
+        if (!available.empty()) {
+            error += ')';
+        }
+
+        return failWithLocation(L, error);
+    }
+
+    // Shares the module cache with file modules. Those are keyed by absolute
+    // path, so "@sonata/..." can never collide with one.
+    const std::string key = std::string(kBuiltinPrefix) + library->name;
+
+    if (pushCached(L, key)) {
+        return 1;
+    }
+
+    lua_pushcfunction(L, &openLibrary, "openLibrary");
+    lua_pushlightuserdata(L, const_cast<NativeLibrary*>(library));
+
+    if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
+        const std::string cause = errorMessage(L);
+        lua_pop(L, 2); // the error value, and the string errorMessage() pushed
+
+        return failWithLocation(L, "could not open built-in library '" + std::string(request) + "': " + cause);
+    }
+
+    cacheTop(L, key);
+    return 1;
+}
+
 } // namespace
 
 
@@ -248,6 +393,30 @@ Bytecode FileSystemSource::load(std::string_view path) const {
     return compiler_.compile(contents.str());
 }
 
+std::optional<std::vector<std::string>> FileSystemSource::dependencyNames(std::string_view directory) const {
+    const std::string root(directory);
+
+    // Cheap "no" for the (common) case of a folder that isn't a package.
+    if (!exists(join(root, kManifestPath))) {
+        return std::nullopt;
+    }
+
+    // Project::open() is what installed packages were validated with, so the
+    // names it hands back have already passed the dependency rules.
+    try {
+        const Project project = Project::open(fs::path(root));
+
+        std::vector<std::string> names;
+        for (const Project::Dependency& dependency : project.manifest().dependencies) {
+            names.push_back(dependency.name);
+        }
+
+        return names;
+    } catch (const std::exception& e) {
+        throw ModuleError("could not read the manifest of " + root + ": " + e.what());
+    }
+}
+
 void MemorySource::add(std::string_view path, Bytecode bytecode) {
     std::string rooted(path);
     if (rooted.empty() || (rooted[0] != '/' && rooted[0] != '\\')) {
@@ -260,6 +429,29 @@ void MemorySource::add(std::string_view path, Bytecode bytecode) {
     }
 
     files_[std::move(*normalized)] = std::move(bytecode);
+}
+
+void MemorySource::addPackage(std::string_view directory, std::vector<std::string> dependencies) {
+    std::string rooted(directory);
+    if (rooted.empty() || (rooted[0] != '/' && rooted[0] != '\\')) {
+        rooted.insert(0, "/");
+    }
+
+    auto normalized = normalizePath(rooted);
+    if (!normalized) {
+        throw std::invalid_argument("package directory escapes the root: " + std::string(directory));
+    }
+
+    packages_[std::move(*normalized)] = std::move(dependencies);
+}
+
+std::optional<std::vector<std::string>> MemorySource::dependencyNames(std::string_view directory) const {
+    auto it = packages_.find(std::string(directory));
+    if (it == packages_.end()) {
+        return std::nullopt;
+    }
+
+    return it->second;
 }
 
 bool MemorySource::exists(std::string_view path) const {
@@ -282,11 +474,21 @@ ModuleLoader::ModuleLoader(std::unique_ptr<ModuleSource> source)
     if (!source_) {
         throw std::invalid_argument("ModuleLoader needs a ModuleSource");
     }
+
+    registerBuiltinLibraries(libraries_);
+}
+
+void ModuleLoader::addLibrary(NativeLibrary library) {
+    libraries_.add(std::move(library));
 }
 
 void ModuleLoader::addAlias(std::string name, std::string_view directory) {
     if (name.empty() || name.find('/') != std::string::npos) {
         throw std::invalid_argument("invalid alias name: '" + name + "'");
+    }
+
+    if (name == kBuiltinAlias) {
+        throw std::invalid_argument("the alias '@sonata' is reserved for built-in libraries");
     }
 
     auto normalized = normalizePath(directory);
@@ -370,6 +572,11 @@ int ModuleLoader::requireCallback(lua_State* L) {
 }
 
 int ModuleLoader::requireModule(lua_State* L, std::string_view request) {
+    // Built-in libraries are checked before anything else, so "@sonata" can't be shadowed.
+    if (isBuiltinRequest(request)) {
+        return requireBuiltin(L, libraries_, request);
+    }
+
     std::string path;
     std::string error;
 
@@ -416,6 +623,69 @@ int ModuleLoader::requireModule(lua_State* L, std::string_view request) {
     return 1;
 }
 
+auto ModuleLoader::packageOf(const std::string& file) const -> std::optional<Package> {
+    // Walk up from the file's folder to the first one holding a manifest.
+    for (std::optional<std::string> directory = parentDirectory(file);
+         directory;
+         directory = parentDirectory(*directory)) {
+        auto it = manifests_.find(*directory);
+
+        if (it == manifests_.end()) {
+            // If this throws nothing gets cached, so the next require tries again.
+            it = manifests_.emplace(*directory, source_->dependencyNames(*directory)).first;
+        }
+
+        if (it->second) {
+            return Package{*directory, *it->second};
+        }
+    }
+
+    return std::nullopt;
+}
+
+bool ModuleLoader::resolveAlias(
+    const std::string& name,
+    std::string_view request,
+    const std::string& caller,
+    std::string& directory,
+    std::string& error
+) const {
+    // 1. Explicit registrations always win.
+    if (const auto alias = aliases_.find(name); alias != aliases_.end()) {
+        directory = alias->second;
+        return true;
+    }
+
+    // 2. The manifest of the package the requiring file belongs to.
+    std::optional<Package> owner;
+
+    if (!caller.empty()) {
+        try {
+            owner = packageOf(caller);
+        } catch (const std::exception& e) {
+            error = "can't resolve require '" + std::string(request) + "': " + e.what();
+            return false;
+        }
+    }
+
+    if (owner) {
+        const std::vector<std::string>& declared = owner->dependencies;
+
+        if (std::find(declared.begin(), declared.end(), name) != declared.end()) {
+            directory = join(dependenciesDirectoryOf(owner->root), name);
+            return true;
+        }
+    }
+
+    error = "unknown alias '@" + name + "' in require '" + std::string(request) + "'";
+    if (owner) {
+        error += " (it isn't registered, and " + join(owner->root, kManifestPath) +
+                 " doesn't declare a dependency called '" + name + "')";
+    }
+
+    return false;
+}
+
 bool ModuleLoader::resolve(
     std::string_view request,
     const std::string& caller,
@@ -435,13 +705,12 @@ bool ModuleLoader::resolve(
         const std::size_t slash = request.find('/');
         const std::string name(request.substr(1, slash == std::string_view::npos ? slash : slash - 1));
 
-        auto alias = aliases_.find(name);
-        if (alias == aliases_.end()) {
-            error = "unknown alias '@" + name + "' in require '" + shown + "'";
+        std::string directory;
+        if (!resolveAlias(name, shown, caller, directory, error)) {
             return false;
         }
 
-        target = alias->second;
+        target = directory;
         if (slash != std::string_view::npos) {
             target += '/';
             target += request.substr(slash + 1);

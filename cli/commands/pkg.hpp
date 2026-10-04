@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../cli/command.hpp"
+#include "command.hpp"
 
 namespace sonata::commands {
 

@@ -1,12 +1,10 @@
-#include "environment.hpp"
-
 #include <cstdio>
-#include <new>
 #include <stdexcept>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
 
+#include <sonata/core/luau/environment.hpp>
 #include "lualib.h"
 
 namespace sonata::luau {

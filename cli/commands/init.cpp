@@ -1,25 +1,23 @@
-#include "init.hpp"
-#include "../core/project.hpp"
-#include "../core/luau/datafile.hpp"
-
-#include <optional>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <vector>
+#include <optional>
 #include <string>
+#include <vector>
+
+#include <sonata/core/luau/datafile.hpp>
+#include <sonata/core/project.hpp>
+#include "commands/init.hpp"
 
 namespace fs = std::filesystem;
 
 /*  Argument Parsing:
     Parses a single positional path argument.
-    Returns std::nullopt if no path was supplied or a path was already specified.
-    Throws no exceptions.    
+    Returns std::nullopt if no path was supplied or a path was already
+   specified. Throws no exceptions.
 */
-std::optional<fs::path> parse_path_arg(
-    std::string_view arg,
-    bool& pathspecified
-) {
+std::optional<fs::path> parse_path_arg(std::string_view arg,
+                                       bool &pathspecified) {
     if (arg.empty())
         return std::nullopt;
 
@@ -38,10 +36,7 @@ std::optional<fs::path> parse_path_arg(
 
     Non-existent components are also allowed.
 */
-bool validate_directory_path(
-    const fs::path& path,
-    std::string& error
-) {
+bool validate_directory_path(const fs::path &path, std::string &error) {
     if (path.empty()) {
         error = "path is empty";
         return false;
@@ -52,14 +47,13 @@ bool validate_directory_path(
 
     // Walk through each component instead of only checking
     // the final path.
-    for (const auto& component : path) {
+    for (const auto &component : path) {
         current /= component;
 
         if (!fs::exists(current, ec)) {
             if (ec) {
-                error = "could not inspect path '" +
-                        current.string() + "': " +
-                        ec.message();
+                error = "could not inspect path '" + current.string() +
+                        "': " + ec.message();
                 return false;
             }
 
@@ -70,14 +64,13 @@ bool validate_directory_path(
 
         if (!fs::is_directory(current, ec)) {
             if (ec) {
-                error = "could not inspect path '" +
-                        current.string() + "': " +
-                        ec.message();
+                error = "could not inspect path '" + current.string() +
+                        "': " + ec.message();
                 return false;
             }
 
-            error = "path component is not a directory: '" +
-                    current.string() + "'";
+            error =
+                "path component is not a directory: '" + current.string() + "'";
             return false;
         }
     }
@@ -87,7 +80,7 @@ bool validate_directory_path(
 
 namespace sonata::commands {
 
-int init(int argc, char** argv) {
+int init(int argc, char **argv) {
     namespace fs = std::filesystem;
 
     fs::path specifiedpath;
@@ -97,11 +90,11 @@ int init(int argc, char** argv) {
     std::vector<std::string> args(argv, argv + argc);
 
     for (size_t i = 0; i < args.size(); ++i) {
-        const std::string& arg = args[i];
-    
+        const std::string &arg = args[i];
+
         if (arg.empty())
             continue;
-    
+
         // Options
         if (arg[0] == '-') {
             if (arg == "--validate") {
@@ -111,7 +104,7 @@ int init(int argc, char** argv) {
                 return 1;
             }
         }
-    
+
         // Path
         else {
             auto path = parse_path_arg(arg, pathspecified);
@@ -124,49 +117,51 @@ int init(int argc, char** argv) {
             specifiedpath = *path;
         }
     }
-    fs::path root = pathspecified
-        ? specifiedpath
-        : fs::current_path();
-    
+    fs::path root = pathspecified ? specifiedpath : fs::current_path();
+
     std::string patherror;
-    
+
     if (!validate_directory_path(root, patherror)) {
         std::cerr << "error: " << patherror << "\n";
         return 1;
     }
-    
+
     std::error_code ec;
-    
+
     if (!fs::exists(root, ec)) {
         if (!fs::create_directories(root, ec)) {
-            std::cerr << "error: could not create directory '"
-                    << root << "': "
-                    << ec.message() << "\n";
+            std::cerr << "error: could not create directory '" << root
+                      << "': " << ec.message() << "\n";
             return 1;
         }
     }
 
     fs::path sonata = root / ".sonata";
-    
+
     if (validate) {
         std::optional<sonata::Project> project;
         try {
             project = sonata::Project::open(".");
-        } catch (const std::runtime_error& e) {
+        } catch (const std::runtime_error &e) {
             std::cerr << "error: " << e.what() << "\n";
-            std::cout << "possible fix: run 'sn init' (run 'sn init -h' to see info)\n";
+            std::cout << "possible fix: run 'sn init' (run 'sn init -h' to see "
+                         "info)\n";
             return 1;
         }
         if (!project) {
-            std::cerr << "error: project couldn't be declared/opened due to an unknown error\n";
+            std::cerr << "error: project couldn't be declared/opened due to an "
+                         "unknown error\n";
             return 1;
         }
         std::cout << "success\n";
         std::cout << "project root: " << project->root() << "\n";
-        std::cout << "project manifest: " << luau::DataFile::parseFile(project->projectFile()).serialize() << "\n";
+        std::cout
+            << "project manifest: "
+            << luau::DataFile::parseFile(project->projectFile()).serialize()
+            << "\n";
         return 0;
     }
-    
+
     try {
         fs::create_directories(sonata / "deps");
 
@@ -179,11 +174,13 @@ int init(int argc, char** argv) {
         manifest.set("entrypoint", "main.luau");
         manifest.set("authors", luau::DataValue::array({}));
         manifest.set("dependencies", luau::DataValue::array({}));
-
+        project << "--[[\nThis file was automatically generated by Sonata.\n"
+                   "It's not recommended to edit it manually, unless\n"
+                   "you know what you're doing.\n]]\n\n";
         project << luau::DataFile::serialize(manifest);
         mainluau << "print('Hello World!')";
         std::cout << "Initialized Sonata project at " << root << "\n";
-    } catch (const fs::filesystem_error& error) {
+    } catch (const fs::filesystem_error &error) {
         std::cerr << "error: " << error.what() << '\n';
         return 1;
     }
@@ -191,32 +188,27 @@ int init(int argc, char** argv) {
     return 0;
 }
 
-const cli::Command& init_command()
-{
+const cli::Command &init_command() {
     static const cli::Argument validate_arg{
         .name = "--validate",
         .aliases = {},
-        .description = "Prints if the specified directory is a valid Sonata project"
-    };
+        .description =
+            "Prints if the specified directory is a valid Sonata project"};
     static const cli::Command command{
         .name = "init",
         .description = "Create a new Sonata project",
         .args = {cli::help_argument, validate_arg},
-        .usage = {
-            "sn init"
-        },
+        .usage = {"sn init"},
 
-        .examples = {
-            "sn init"
-        },
-        
+        .examples = {"sn init"},
+
         .execute = init,
-        
+
         .children = {}
-        
+
     };
 
     return command;
 }
 
-}
+} // namespace sonata::commands
