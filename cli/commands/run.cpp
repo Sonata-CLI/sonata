@@ -44,7 +44,7 @@ namespace sonata::commands {
 namespace {
 
 // argv[0] is the command itself ("run"); its arguments start after it.
-constexpr int kFirstArgument = 1;
+constexpr int kFirstArgument = 0;
 
 struct Options {
     fs::path start = ".";          // project directory, or any file inside it

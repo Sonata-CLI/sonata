@@ -1,5 +1,5 @@
-structure.txt
 build
 git
 testing
+compile_commands.json
 **/.noshorten

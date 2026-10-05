@@ -20,6 +20,43 @@ target_include_directories(sonata
 
 target_link_libraries(sonata PUBLIC Luau.Common Luau.VM Luau.Compiler Luau.Ast)
 
+# ---- Build metadata for sonata/core/info.hpp ----
+# Version numbers come from project(... VERSION x.y.z) in the root CMakeLists.
+# The root may also pre-set SONATA_VERSION_PRE, SONATA_GIT_HASH and
+# SONATA_LUAU_VERSION; anything it doesn't set is filled in or left empty here.
+if(NOT DEFINED SONATA_GIT_HASH)
+  set(SONATA_GIT_HASH "")
+  find_package(Git QUIET)
+  if(GIT_FOUND)
+    execute_process(
+      COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+      WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+      OUTPUT_VARIABLE SONATA_GIT_HASH
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      RESULT_VARIABLE git_result
+      ERROR_QUIET)
+    if(NOT git_result EQUAL 0)
+      set(SONATA_GIT_HASH "")
+    endif()
+  endif()
+endif()
+
+set(sonata_info_defs
+  "SONATA_GIT_HASH=\"${SONATA_GIT_HASH}\""
+  "SONATA_LUAU_VERSION=\"${SONATA_LUAU_VERSION}\""
+  "SONATA_VERSION_PRE=\"${SONATA_VERSION_PRE}\""
+  "SONATA_BUILD_TYPE=\"$<LOWER_CASE:$<CONFIG>>\"")
+
+foreach(part MAJOR MINOR PATCH)
+  if(NOT "${PROJECT_VERSION_${part}}" STREQUAL "")
+    list(APPEND sonata_info_defs SONATA_VERSION_${part}=${PROJECT_VERSION_${part}})
+  endif()
+endforeach()
+
+# PUBLIC so the CLI and installed consumers see the same values as the
+# library (info.hpp is all inline constexpr).
+target_compile_definitions(sonata PUBLIC ${sonata_info_defs})
+
 if(SONATA_INSTALL AND SONATA_OWNS_LUAU)
   include(CMakePackageConfigHelpers)
 

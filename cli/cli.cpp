@@ -258,16 +258,13 @@ const Command *suggest_command(const std::string &input) {
 // printing
 
 void print_banner() {
-    if (BUILD_TYPE == "Debug") {
-        std::cout << ui::accent(info::name) << ' '
-                  << ui::dim("v" + info::version_string()) << ' '
-                  << ui::accent(BUILD_TYPE) << '\n'
-                  << ui::dim(info::tagline) << "\n\n";
-    } else {
-        std::cout << ui::accent(info::name) << ' '
-                  << ui::dim("v" + info::version_string()) << '\n'
-                  << ui::dim(info::tagline) << "\n\n";
-    }
+    std::cout << ui::accent(info::name) << ' '
+              << ui::dim("v" + info::version_string());
+
+    if (info::is_debug)
+        std::cout << ' ' << ui::accent(info::build_type);
+
+    std::cout << '\n' << ui::dim(info::tagline) << "\n\n";
 }
 
 void print_version_verbose() {
@@ -406,7 +403,7 @@ int CLI::run(int argc, char **argv) {
         if (argc >= 3 && std::string(argv[2]) == "--verbose") {
             print_version_verbose();
         } else {
-            std::cout << "sonata " << info::version_string() << '\n';
+            std::cout << info::id << ' ' << info::version_string() << '\n';
         }
 
         return 0;

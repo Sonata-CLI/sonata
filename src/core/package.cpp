@@ -6,10 +6,12 @@
 #include <iostream>
 #include <random>
 #include <utility>
+#include <sstream>
 
 #include <sonata/core/luau/datafile.hpp>
 #include <sonata/core/module.hpp>
 #include <sonata/core/package.hpp>
+#include <sonata/core/library.hpp>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN

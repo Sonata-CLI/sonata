@@ -204,7 +204,7 @@ class ModuleLoader {
     void run(VM &vm, std::string_view entry);
 
     // Registers an extra built-in: require("@sonata/<name>")
-    void addLibrary(NativeLibrary library);
+    void addLibrary(lib::NativeLibrary library);
 
   private:
     static int requireCallback(lua_State *L);
@@ -231,7 +231,7 @@ class ModuleLoader {
     // manifest can't be read.
     std::optional<Package> packageOf(const std::string &file) const;
 
-    LibraryRegistry libraries_;
+    lib::LibraryRegistry libraries_;
 
     std::unique_ptr<ModuleSource> source_;
     std::unordered_map<std::string, std::string> aliases_;

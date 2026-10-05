@@ -1,15 +1,18 @@
 #pragma once
 
 // Single source of truth for Sonata's identity and build metadata.
+// See CMakeLists.txt in each folder
 //
-// Every value can be overridden from the build system, e.g. in CMake:
+//   root CMakeLists.txt   project(sonata VERSION x.y.z)
+//                         optional: set(SONATA_VERSION_PRE "alpha.1")
+//                                   set(SONATA_GIT_HASH "...")
+//                                   set(SONATA_LUAU_VERSION "...")
+//   src/CMakeLists.txt    turns the above (plus the build config) into
+//                         PUBLIC compile definitions on the `sonata` target
 //
-//   target_compile_definitions(sonata PRIVATE
-//       SONATA_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
-//       SONATA_VERSION_MINOR=${PROJECT_VERSION_MINOR}
-//       SONATA_VERSION_PATCH=${PROJECT_VERSION_PATCH}
-//       SONATA_GIT_HASH="${GIT_HASH}"
-//       SONATA_LUAU_VERSION="${LUAU_VERSION}")
+// The definitions are PUBLIC on purpose: everything in this header is
+// inline constexpr, so the library, the CLI and any installed consumer must
+// all see the same values (otherwise it's an ODR violation).
 //
 // Anything left undefined falls back to the defaults below.
 
@@ -34,17 +37,14 @@
 #ifndef SONATA_LUAU_VERSION
 #define SONATA_LUAU_VERSION ""
 #endif
-#ifndef SONATA_BUILD_TYPE
-#ifdef NDEBUG
-#define SONATA_BUILD_TYPE "release"
-#else
-#define SONATA_BUILD_TYPE "debug"
-#endif
+#ifndef SONATA_BUILD_TYPE // lowercase CMake config: "debug", "release", "relwithdebinfo", ...
+#define SONATA_BUILD_TYPE ""
 #endif
 
 namespace sonata::info {
 
     inline constexpr std::string_view name = "Sonata";
+    inline constexpr std::string_view id = "sonata";
     inline constexpr std::string_view binary = "sn";
     inline constexpr std::string_view tagline = "All-in-one Luau toolkit";
 
@@ -64,7 +64,24 @@ namespace sonata::info {
 
     inline constexpr std::string_view git_hash = SONATA_GIT_HASH;
     inline constexpr std::string_view luau_version = SONATA_LUAU_VERSION;
-    inline constexpr std::string_view build_type = SONATA_BUILD_TYPE;
+
+    namespace detail {
+        inline constexpr std::string_view configured_build_type = SONATA_BUILD_TYPE;
+
+        // Used when the build system gave us nothing (e.g. single-config
+        // generator with an empty CMAKE_BUILD_TYPE).
+#ifdef NDEBUG
+        inline constexpr std::string_view fallback_build_type = "release";
+#else
+        inline constexpr std::string_view fallback_build_type = "debug";
+#endif
+    } // namespace detail
+
+    inline constexpr std::string_view build_type =
+        detail::configured_build_type.empty() ? detail::fallback_build_type
+                                              : detail::configured_build_type;
+
+    inline constexpr bool is_debug = build_type == "debug";
 
     // "0.1.0" or "0.1.0-alpha.1"
     inline std::string version_string() {

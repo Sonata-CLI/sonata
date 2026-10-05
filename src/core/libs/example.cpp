@@ -27,7 +27,7 @@
 
 #include "libs.hpp"
 
-namespace sonata::luau::libs {
+namespace sonata::lib::libs {
 
 namespace {
 

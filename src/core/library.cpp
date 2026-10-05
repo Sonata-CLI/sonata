@@ -6,7 +6,7 @@
 
 #include "libs/libs.hpp"
 
-namespace sonata::luau {
+namespace sonata::lib {
 
 namespace {
 
@@ -69,4 +69,4 @@ void registerBuiltinLibraries(LibraryRegistry& registry) {
     registry.add({"example", libs::openExample});
 }
 
-} // namespace sonata::luau
+} // namespace sonata::lib

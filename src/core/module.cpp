@@ -251,7 +251,7 @@ std::string_view builtinName(std::string_view request) {
 //
 // Stack on entry: [library (lightuserdata)]. Returns the module value.
 int openLibrary(lua_State* L) {
-    const auto* library = static_cast<const NativeLibrary*>(lua_tolightuserdata(L, 1));
+    const auto* library = static_cast<const lib::NativeLibrary*>(lua_tolightuserdata(L, 1));
 
     const int before = lua_gettop(L);
     library->open(L);
@@ -270,14 +270,14 @@ int openLibrary(lua_State* L) {
 
 // require("@sonata/<name>"). Same contract as requireModule(): pushes the
 // value and returns 1, or pushes an error value and returns -1.
-int requireBuiltin(lua_State* L, const LibraryRegistry& libraries, std::string_view request) {
+int requireBuiltin(lua_State* L, const lib::LibraryRegistry& libraries, std::string_view request) {
     const std::string_view name = builtinName(request);
 
     if (name.empty()) {
         return failWithLocation(L, "require '" + std::string(request) + "' is missing a library name (expected '@sonata/<name>')");
     }
 
-    const NativeLibrary* library = libraries.find(name);
+    const lib::NativeLibrary* library = libraries.find(name);
     if (library == nullptr) {
         std::string error = "unknown built-in library '" + std::string(request) + "'";
 
@@ -302,7 +302,7 @@ int requireBuiltin(lua_State* L, const LibraryRegistry& libraries, std::string_v
     }
 
     lua_pushcfunction(L, &openLibrary, "openLibrary");
-    lua_pushlightuserdata(L, const_cast<NativeLibrary*>(library));
+    lua_pushlightuserdata(L, const_cast<lib::NativeLibrary*>(library));
 
     if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
         const std::string cause = errorMessage(L);
@@ -478,7 +478,7 @@ ModuleLoader::ModuleLoader(std::unique_ptr<ModuleSource> source)
     registerBuiltinLibraries(libraries_);
 }
 
-void ModuleLoader::addLibrary(NativeLibrary library) {
+void ModuleLoader::addLibrary(lib::NativeLibrary library) {
     libraries_.add(std::move(library));
 }
 

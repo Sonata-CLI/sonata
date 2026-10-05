@@ -8,7 +8,7 @@
 
 struct lua_State;
 
-namespace sonata::luau {
+namespace sonata::lib {
 
 // Built-in libraries
 // ------------------
@@ -79,4 +79,4 @@ private:
 // Adds every library that ships with sonata. ModuleLoader calls this itself.
 void registerBuiltinLibraries(LibraryRegistry& registry);
 
-} // namespace sonata::luau
+} // namespace sonata::lib
