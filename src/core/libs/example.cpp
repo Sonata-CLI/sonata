@@ -153,4 +153,4 @@ void openExample(lua_State* L) {
     lua_setfield(L, -2, "version");
 }
 
-} // namespace sonata::luau::libs
+} // namespace sonata::lib::libs

@@ -7,5 +7,6 @@ struct lua_State;
 namespace sonata::lib::libs {
 
 void openExample(lua_State* L); // @sonata/example
+void openFs(lua_State* L);      // @sonata/fs
 
 } // namespace sonata::luau::libs
