@@ -422,9 +422,7 @@ int CLI::run(int argc, char **argv) {
                       << "'?\n";
         }
 
-        std::cerr << '\n';
-
-        print_help();
+        std::cerr << "\nrun 'sn --help' to see a list of all available commands\n";
 
         return 1;
     }
