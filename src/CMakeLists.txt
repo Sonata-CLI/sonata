@@ -25,7 +25,8 @@ add_library(sonata
   core/libs/stdio.cpp
   core/libs/json.cpp
   core/libs/crypto.cpp
-  )
+  core/libs/datetime.cpp
+)
 add_library(sonata::sonata ALIAS sonata)
 
 target_compile_features(sonata PUBLIC cxx_std_20)
