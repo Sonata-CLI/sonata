@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(sonata VERSION 0.1.6 LANGUAGES CXX)
+project(sonata VERSION 0.1.8 LANGUAGES CXX)
 
 if(PROJECT_IS_TOP_LEVEL)
   set(CMAKE_CXX_EXTENSIONS OFF)

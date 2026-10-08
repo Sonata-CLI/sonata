@@ -66,7 +66,16 @@ std::vector<std::string> LibraryRegistry::names() const {
 
 // Add all builtin libraries here
 void registerBuiltinLibraries(LibraryRegistry& registry) {
-    registry.add({"example", libs::openExample});
+    //registry.add({"example", libs::openExample});
+    registry.add({"fs", libs::openFs});
+    registry.add({"path", libs::openPath});
+    registry.add({"sys", libs::openSys});
+    registry.add({"task", libs::openTask});
+    registry.add({"process", libs::openProcess});
+    registry.add({"stdio", libs::openStdio});
+    registry.add({"net", libs::openNet});
+    registry.add({"json", libs::openJson});
+    registry.add({"crypto", libs::openCrypto});
 }
 
 } // namespace sonata::lib

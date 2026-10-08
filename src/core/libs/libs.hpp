@@ -3,10 +3,18 @@
 struct lua_State;
 
 // Openers for the built-in libraries. Private to src/core: the outside world
-// only ever sees them through LibraryRegistry / require("@sonata/<name>").
+// only ever sees them through LibraryRegistry / require("@sonata/<n>").
 namespace sonata::lib::libs {
 
-void openExample(lua_State* L); // @sonata/example
+//void openExample(lua_State* L); // @sonata/example
 void openFs(lua_State* L);      // @sonata/fs
+void openPath(lua_State* L);    // @sonata/path
+void openSys(lua_State* L);     // @sonata/sys
+void openTask(lua_State* L);    // @sonata/task
+void openProcess(lua_State* L); // @sonata/process
+void openStdio(lua_State* L);   // @sonata/stdio
+void openNet(lua_State* L);     // @sonata/net
+void openJson(lua_State* L);    // @sonata/json
+void openCrypto(lua_State* L);  // @sonata/crypto
 
-} // namespace sonata::luau::libs
+} // namespace sonata::lib::libs

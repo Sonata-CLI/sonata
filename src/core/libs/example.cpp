@@ -1,4 +1,5 @@
 // @sonata/example: a minimal template for a built-in library.
+// !! This file is NOT loaded in runtime. !!
 //
 //     local example = require("@sonata/example")
 //

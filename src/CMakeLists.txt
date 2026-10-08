@@ -4,11 +4,29 @@ configure_file(${PROJECT_SOURCE_DIR}/cmake/version.hpp.in
                ${CMAKE_CURRENT_BINARY_DIR}/generated/sonata/version.hpp @ONLY)
 
 add_library(sonata
-  core/package.cpp core/project.cpp core/module.cpp
-  core/luau/compiler.cpp core/luau/datafile.cpp
-  core/luau/environment.cpp core/luau/vm.cpp
-  core/library.cpp core/libs/example.cpp)
-add_library(sonata::sonata ALIAS sonata)   # same name for in-tree and installed use
+  # systems
+  core/package.cpp
+  core/project.cpp
+  core/module.cpp
+  core/library.cpp
+  # luau systems
+  core/luau/compiler.cpp
+  core/luau/datafile.cpp
+  core/luau/environment.cpp
+  core/luau/vm.cpp
+  # builtin libs
+  #core/libs/example.cpp
+  core/libs/net.cpp
+  core/libs/fs.cpp
+  core/libs/path.cpp
+  core/libs/sys.cpp
+  core/libs/process.cpp
+  core/libs/task.cpp
+  core/libs/stdio.cpp
+  core/libs/json.cpp
+  core/libs/crypto.cpp
+  )
+add_library(sonata::sonata ALIAS sonata)
 
 target_compile_features(sonata PUBLIC cxx_std_20)
 
@@ -18,7 +36,8 @@ target_include_directories(sonata
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
-target_link_libraries(sonata PUBLIC Luau.Common Luau.VM Luau.Compiler Luau.Ast)
+find_package(OpenSSL REQUIRED)
+target_link_libraries(sonata PUBLIC Luau.Common Luau.VM Luau.Compiler Luau.Ast OpenSSL::SSL OpenSSL::Crypto)
 
 # ---- Build metadata for sonata/core/info.hpp ----
 # Version numbers come from project(... VERSION x.y.z) in the root CMakeLists.
@@ -42,6 +61,7 @@ if(NOT DEFINED SONATA_GIT_HASH)
 endif()
 
 set(sonata_info_defs
+  "SONATA_NET_TLS"
   "SONATA_GIT_HASH=\"${SONATA_GIT_HASH}\""
   "SONATA_LUAU_VERSION=\"${SONATA_LUAU_VERSION}\""
   "SONATA_VERSION_PRE=\"${SONATA_VERSION_PRE}\""
