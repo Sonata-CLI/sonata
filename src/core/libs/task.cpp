@@ -15,14 +15,6 @@
 // The library only queues work. The host runs it by pumping the scheduler (see the host
 // API below) and must run the main script on a coroutine, otherwise task.wait()
 // has nothing to yield.
-//
-// Differences from Roblox:
-//   * task.synchronize / task.desynchronize do not exist (there is no Parallel Luau).
-//   * There are no frames. One "cycle" is one task::step(): due timers first, then
-//     the deferred threads queued so far (deferred threads also run once before the
-//     timers, for work queued outside a cycle). A thread deferred from inside a
-//     deferred thread waits for the next deferred phase.
-//   * Errors in scheduled threads go to the host's error handler, not an output window.
 
 #include <chrono>
 #include <cmath>

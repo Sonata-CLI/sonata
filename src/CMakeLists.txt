@@ -1,3 +1,4 @@
+# src/CMakeLists.txt
 include(GNUInstallDirs)
 
 configure_file(${PROJECT_SOURCE_DIR}/cmake/version.hpp.in
@@ -73,6 +74,11 @@ foreach(part MAJOR MINOR PATCH)
     list(APPEND sonata_info_defs SONATA_VERSION_${part}=${PROJECT_VERSION_${part}})
   endif()
 endforeach()
+
+if(WIN32)
+  target_link_libraries(sonata PRIVATE ws2_32)
+endif()
+
 
 # PUBLIC so the CLI and installed consumers see the same values as the
 # library (info.hpp is all inline constexpr).

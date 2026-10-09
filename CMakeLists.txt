@@ -1,3 +1,4 @@
+# CMakeLists.txt
 cmake_minimum_required(VERSION 3.21)
 project(sonata VERSION 0.1.8 LANGUAGES CXX)
 
@@ -6,8 +7,9 @@ if(PROJECT_IS_TOP_LEVEL)
   set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 endif()
 
-option(SONATA_BUILD_CLI "Build the sn executable" ${PROJECT_IS_TOP_LEVEL})
-option(SONATA_INSTALL   "Generate install rules"  ${PROJECT_IS_TOP_LEVEL})
+option(SONATA_BUILD_CLI   "Build the sn executable" ${PROJECT_IS_TOP_LEVEL})
+option(SONATA_INSTALL     "Generate install rules"  ${PROJECT_IS_TOP_LEVEL})
+option(SONATA_BUILD_TESTS "Build unit tests"        ${PROJECT_IS_TOP_LEVEL})
 
 set(SONATA_BUILD_TYPE "")
 
@@ -33,4 +35,23 @@ endif()
 add_subdirectory(src)
 if(SONATA_BUILD_CLI)
   add_subdirectory(cli)
+endif()
+
+if(SONATA_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
+
+if(SONATA_INSTALL)
+  set(CPACK_PACKAGE_NAME "sonata")
+  set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+  set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
+  
+  if(WIN32)
+    set(CPACK_GENERATOR "ZIP")
+  else()
+    set(CPACK_GENERATOR "TGZ")
+  endif()
+  
+  include(CPack)
 endif()

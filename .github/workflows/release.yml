@@ -1,0 +1,76 @@
+name: Draft Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Install OpenSSL (Linux)
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y libssl-dev
+
+    - name: Install OpenSSL (macOS)
+      if: runner.os == 'macOS'
+      run: brew install openssl
+
+    - name: Install OpenSSL (Windows)
+      if: runner.os == 'Windows'
+      run: choco install openssl
+
+    - name: Configure CMake
+      run: >
+        cmake -B build -S . 
+        -DCMAKE_BUILD_TYPE=Release 
+        -DBUILD_SHARED_LIBS=ON 
+        -DSONATA_INSTALL=ON 
+        -DSONATA_BUILD_CLI=ON
+
+    - name: Build
+      run: cmake --build build --preset release -j 4
+
+    - name: Run CPack
+      working-directory: build
+      run: cpack -C release
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: sonata-packages-${{ matrix.os }}
+        path: |
+          build/*.tar.gz
+          build/*.zip
+        if-no-files-found: error
+
+  create-release:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        merge-multiple: true
+
+    - name: Create Draft Release
+      uses: softprops/action-gh-release@v2
+      with:
+        draft: true
+        generate_release_notes: true
+        files: artifacts/*

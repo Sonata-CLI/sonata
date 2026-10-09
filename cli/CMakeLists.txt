@@ -1,3 +1,4 @@
+# cli/CMakeLists.txt
 include(GNUInstallDirs)
 
 add_library(sonata_cli STATIC cli.cpp commands/init.cpp commands/pkg.cpp commands/run.cpp)
