@@ -34,7 +34,6 @@
 //   * process.exit uses std::exit: stdio is flushed and atexit handlers run, but stack objects of
 //     the host are not unwound. Register cleanup with std::atexit if it must always happen.
 
-#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>

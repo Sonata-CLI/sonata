@@ -1,4 +1,10 @@
+CompileFlags:
+  CompilationDatabase: build/debug
+---
 If:
   PathMatch:
     - .*/build/.*
     - .*/external/.*
+    - .*\.in
+Diagnostics:
+  Suppress: '*'

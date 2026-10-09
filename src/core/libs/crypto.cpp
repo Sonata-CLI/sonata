@@ -522,7 +522,7 @@ u32 calibrate(const HashInfo& h, double ms, size_t len) {
     const auto t0 = std::chrono::steady_clock::now();
     const Bytes sink = pbkdf2(h, "probe", "probe", probe, h.digest);
     const double dt = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    const double blocks = double((len + h.digest - 1) / h.digest);
+    const double blocks = double((len + h.digest - (float)1) / h.digest);
     const double n = ms / (std::max(dt / probe, 1e-6) * blocks);
     return u32(std::clamp(n + (sink.empty() ? 1 : 0), 1000.0, 100000000.0));
 }
@@ -1618,7 +1618,7 @@ int cryptoUlid(lua_State* L) {
 // crypto.totp(secret: string, opts: { digits: number?, period: number?, hash: string?, time: number? }?): string
 int cryptoTotp(lua_State* L) {
     const SV secret = checkSV(L, 1);
-    double digits = 6, period = 30, now = double(nowNs() / 1000000000ULL);
+    double digits = 6, period = 30, now = double(nowNs()) / 1000000000.0;
     const char* hashName = "sha1";
     if (!lua_isnoneornil(L, 2)) {
         luaL_checktype(L, 2, LUA_TTABLE);

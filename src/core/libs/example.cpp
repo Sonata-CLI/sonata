@@ -26,7 +26,6 @@
 #include "lua.h"
 #include "lualib.h"
 
-#include "libs.hpp"
 
 namespace sonata::lib::libs {
 

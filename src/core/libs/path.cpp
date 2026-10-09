@@ -40,7 +40,6 @@
 //     path.splitList("/bin:/usr/bin")        --> { "/bin", "/usr/bin" }  (empty entries are dropped)
 //     path.joinList({ "/bin", "/usr/bin" })  --> "/bin:/usr/bin"
 
-#include <algorithm>
 #include <filesystem>
 #include <iterator>
 #include <string>

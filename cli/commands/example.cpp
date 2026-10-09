@@ -1,15 +1,8 @@
-#include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <optional>
-#include <string>
-#include <vector>
 
 #include <sonata/core/luau/datafile.hpp>
 #include <sonata/core/project.hpp>
-#include "commands/init.hpp"
-
-namespace fs = std::filesystem;
+#include "commands/example.hpp"
 
 namespace sonata::commands {
 

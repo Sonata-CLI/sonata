@@ -34,7 +34,6 @@
 #include <iterator>
 #include <limits>
 #include <map>
-#include <new>
 #include <optional>
 #include <string>
 #include <thread>
