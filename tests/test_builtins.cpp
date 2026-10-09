@@ -50,8 +50,8 @@ TEST_CASE("Builtin fs library reads, writes, copies, queries, and removes files"
         local fs = require("@sonata/fs")
         assert(fs.version == 1 and fs.maxReadSize > 0)
         assert(fs.modes.file == 420 and fs.modes.privateDirectory == 448)
-
         local root = fs.makeTempDir("sonata-test-")
+        root = fs.realPath(root)
         local source = root .. "/source"
         fs.makeDir(source .. "/nested", true)
         local file = source .. "/nested/data.bin"

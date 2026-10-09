@@ -33,9 +33,9 @@ jobs:
       if: runner.os == 'Windows'
       run: choco install openssl
 
+    - name: Build and Run Tests
+      run: bash ./b.sh test release
+      
     - name: Run Analyze (Linux Only)
       if: runner.os == 'Linux'
       run: bash ./b.sh analyze
-
-    - name: Build and Run Tests
-      run: bash ./b.sh test release
