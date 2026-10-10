@@ -17,7 +17,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         submodules: recursive
         fetch-depth: 0
@@ -34,28 +34,17 @@ jobs:
       if: runner.os == 'Windows'
       run: choco install openssl
 
-    - name: Configure CMake
-      run: >
-        cmake -B build -S . 
-        -DCMAKE_BUILD_TYPE=Release 
-        -DBUILD_SHARED_LIBS=ON 
-        -DSONATA_INSTALL=ON 
-        -DSONATA_BUILD_CLI=ON
-
-    - name: Build
-      run: cmake --build build --preset release -j 4
-
-    - name: Run CPack
-      working-directory: build
-      run: cpack -C release
+    - name: Build and package
+      shell: bash
+      run: bash ./b.sh package
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: sonata-packages-${{ matrix.os }}
         path: |
-          build/*.tar.gz
-          build/*.zip
+          build/package/*.tar.gz
+          build/package/*.zip
         if-no-files-found: error
 
   create-release:
