@@ -34,7 +34,7 @@ jobs:
       run: choco install openssl
 
     - name: Build and Run Tests
-      run: bash ./b.sh test release
+      run: bash ./b.sh test release && ln -sf "build/release/compile_commands.json" compile_commands.json
       
     - name: Run Analyze (Linux Only)
       if: runner.os == 'Linux'
