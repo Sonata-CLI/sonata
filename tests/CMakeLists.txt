@@ -8,6 +8,7 @@ add_executable(sonata_tests
   main.cpp
   test_luau.cpp
   test_builtins.cpp
+  fs_diagnostic.cpp
 )
 
 target_link_libraries(sonata_tests PRIVATE

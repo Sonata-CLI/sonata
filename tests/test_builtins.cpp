@@ -7,31 +7,6 @@
 #include <string_view>
 #include "helper.hpp"
 
-namespace luau = sonata::luau;
-
-namespace {
-
-class Exec {
-public:
-    Exec(std::string_view code) {
-        loader.install(vm);
-        StdoutCapture capture;
-        status = vm.execute(comp.compile(code));
-        output = capture.finish();
-    }
-
-    const std::string& getOutput() const { return output; }
-    int getStatus() const { return status; }
-
-private:
-    sonata::luau::ModuleLoader loader{std::make_unique<sonata::luau::MemorySource>()};
-    luau::VM vm;
-    luau::Compiler comp;
-    std::string output;
-    int status = 0;
-};
-
-} // namespace
 
 TEST_SUITE("builtins") {
 

@@ -8,6 +8,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <sonata/core/luau/vm.hpp>
+#include <sonata/core/luau/compiler.hpp>
+#include <sonata/core/module.hpp>
 
 class TempDir {
   public:
@@ -106,4 +109,24 @@ class StdoutCapture {
         if (!done_)
             finish();
     }
+};
+
+class Exec {
+public:
+    Exec(std::string_view code) {
+        loader.install(vm);
+        StdoutCapture capture;
+        status = vm.execute(comp.compile(code));
+        output = capture.finish();
+    }
+
+    const std::string& getOutput() const { return output; }
+    int getStatus() const { return status; }
+
+private:
+    sonata::luau::ModuleLoader loader{std::make_unique<sonata::luau::MemorySource>()};
+    sonata::luau::VM vm;
+    sonata::luau::Compiler comp;
+    std::string output;
+    int status = 0;
 };
