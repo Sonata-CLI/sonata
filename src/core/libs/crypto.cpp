@@ -892,7 +892,7 @@ struct Speck : Block {  // Speck128/{128,192,256}; block = LE(y) || LE(x)
     Speck(const u8* key, size_t kl) : Block(16) {
         const int m = int(kl / 8);
         rounds = m + 30;
-        u64 l[36];
+        u64 l[36] = {};
         k[0] = LD<u64>(key, false);
         for (int i = 0; i < m - 1; ++i) l[i] = LD<u64>(key + 8 * (i + 1), false);
         for (int i = 0; i < rounds - 1; ++i) {
@@ -1029,14 +1029,14 @@ struct Plan {
 };
 struct StreamInfo {
     const char* name;
-    int sid;
     size_t iv;
+    int sid;
     bool aead;
 };
 constexpr StreamInfo kStreams[] = {
-    {"chacha20", 0, 12, false},          {"xchacha20", 1, 24, false},
-    {"salsa20", 2, 8, false},            {"xsalsa20", 3, 24, false},
-    {"chacha20-poly1305", 0, 12, true},  {"xchacha20-poly1305", 1, 24, true},
+    {"chacha20", 12, 0, false},          {"xchacha20", 24, 1, false},
+    {"salsa20", 8, 2, false},            {"xsalsa20", 24, 3, false},
+    {"chacha20-poly1305", 12, 0, true},  {"xchacha20-poly1305", 24, 1, true},
 };
 
 bool resolve(SV name, Plan& p) {

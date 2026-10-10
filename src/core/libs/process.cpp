@@ -55,7 +55,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-
+#include <algorithm>
 #include <thread>
 #else
 #include <fcntl.h>
