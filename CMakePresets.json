@@ -13,9 +13,11 @@
       "name": "package",
       "inherits": "release",
       "cacheVariables": {
-        "BUILD_SHARED_LIBS": "ON",
+        "BUILD_SHARED_LIBS": "OFF",
         "SONATA_INSTALL": "ON",
-        "SONATA_BUILD_CLI": "ON"
+        "SONATA_BUILD_CLI": "ON",
+        "SONATA_BUILD_TESTS": "OFF",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
       }
     }
   ],
