@@ -1,27 +1,28 @@
 // tests/test_builtins.cpp
-#include <doctest/doctest.h>
-#include <sonata/core/luau/compiler.hpp>
-#include <sonata/core/module.hpp>
-#include <sonata/core/luau/vm.hpp>
-#include <memory>
-#include <string_view>
 #include "helper.hpp"
-
+#include <doctest/doctest.h>
+#include <memory>
+#include <sonata/core/luau/compiler.hpp>
+#include <sonata/core/luau/vm.hpp>
+#include <sonata/core/module.hpp>
+#include <string_view>
+#include <string>
 
 TEST_SUITE("builtins") {
 
-TEST_CASE("Builtin path library is available through require") {
-    Exec exec(R"(
+    TEST_CASE("Builtin path library is available through require") {
+        Exec exec(R"(
         local path = require("@sonata/path")
         assert(path.version == 1)
         assert(path.posix.normalize("/a/./b//c/..") == "/a/b")
         assert(path.posix.relative("/a/b", "/a/c/d") == "../c/d")
     )");
-    REQUIRE(exec.getStatus() == 0);
-}
+        REQUIRE(exec.getStatus() == 0);
+    }
 
-TEST_CASE("Builtin fs library reads, writes, copies, queries, and removes files") {
-    Exec exec(R"(
+    TEST_CASE("Builtin fs library reads, writes, copies, queries, and removes "
+              "files") {
+        Exec exec(R"lua(
         local fs = require("@sonata/fs")
         assert(fs.version == 1 and fs.maxReadSize > 0)
         assert(fs.modes.file == 420 and fs.modes.privateDirectory == 448)
@@ -36,14 +37,12 @@ TEST_CASE("Builtin fs library reads, writes, copies, queries, and removes files"
         assert(fs.exists(file) and fs.isFile(file) and not fs.isDir(file))
         assert(fs.stat(file).kind == "file" and fs.stat(file).size == 4)
         assert(fs.lstat(file).kind == "file" and fs.realPath(file) == file)
-
         local copied = root .. "/copied.bin"
         fs.copyFile(file, copied)
         assert(fs.readFile(copied) == "A\0BC")
         local moved = root .. "/moved.bin"
         fs.move(copied, moved)
         assert(not fs.exists(copied) and fs.readFile(moved) == "A\0BC")
-
         local names = fs.listDir(source, true)
         assert(#names == 2 and names[1] == "nested" and names[2] == "nested/data.bin")
         local entries = fs.readDir(source, true)
@@ -51,29 +50,125 @@ TEST_CASE("Builtin fs library reads, writes, copies, queries, and removes files"
         local destination = root .. "/destination"
         fs.copyDir(source, destination)
         assert(fs.readFile(destination .. "/nested/data.bin") == "A\0BC")
-
-        fs.chmod(moved, fs.modes.private)
-        assert(fs.stat(moved).mode % 512 == fs.modes.private)
+        fs.chmod(moved, fs.modes.readOnly)
+        assert(fs.stat(moved).mode % 512 == fs.modes.readOnly)
+        fs.chmod(moved, fs.modes.file)
+        assert(fs.stat(moved).mode % 512 == fs.modes.file)
         local link = root .. "/link"
         if pcall(fs.symlink, moved, link) then
             assert(fs.isSymlink(link) and fs.readLink(link) == moved)
             assert(fs.stat(link).kind == "file" and fs.lstat(link).kind == "symlink")
         end
-
         local originalCwd = fs.cwd()
         fs.chdir(root)
-        assert(fs.cwd() == root)
+        local cwdOk, cwdErr = pcall(function() assert(fs.cwd() == root) end)
         fs.chdir(originalCwd)
+        assert(cwdOk, cwdErr)
         assert(fs.tempDir() ~= "" and not fs.isFile(root .. "/missing"))
         fs.removeFile(moved)
         fs.removeDir(root, true)
         assert(not fs.exists(root))
-    )");
-    REQUIRE(exec.getStatus() == 0);
-}
+    )lua");
+        REQUIRE(exec.getStatus() == 0);
+    }
 
-TEST_CASE("Builtin path library covers both lexical path styles") {
-    Exec exec(R"(
+    TEST_CASE("fs diagnostic: cumulative steps") {
+        const std::string header = R"lua(
+        local fs = require("@sonata/fs")
+        assert(fs.version == 1 and fs.maxReadSize > 0)
+        assert(fs.modes.file == 420 and fs.modes.privateDirectory == 448)
+        local root = fs.makeTempDir("sonata-test-")
+        root = fs.realPath(root)
+        local source = root .. "/source"
+        fs.makeDir(source .. "/nested", true)
+        local file = source .. "/nested/data.bin"
+        fs.writeFile(file, "A\0B")
+        fs.appendFile(file, "C")
+    )lua";
+
+        struct Step {
+            const char *name;
+            const char *body;
+        };
+        const Step steps[] = {
+            {"read / exists / stat / lstat / realPath", R"lua(
+            assert(fs.readFile(file) == "A\0BC")
+            assert(fs.exists(file) and fs.isFile(file) and not fs.isDir(file))
+            assert(fs.stat(file).kind == "file" and fs.stat(file).size == 4)
+            assert(fs.lstat(file).kind == "file" and fs.realPath(file) == file)
+    )lua"},
+            {"copyFile / move", R"lua(
+            local copied = root .. "/copied.bin"
+            fs.copyFile(file, copied)
+            assert(fs.readFile(copied) == "A\0BC")
+            local moved = root .. "/moved.bin"
+            fs.move(copied, moved)
+            assert(not fs.exists(copied) and fs.readFile(moved) == "A\0BC")
+    )lua"},
+            {"listDir / readDir / copyDir", R"lua(
+            local names = fs.listDir(source, true)
+            assert(#names == 2 and names[1] == "nested" and names[2] == "nested/data.bin")
+            local entries = fs.readDir(source, true)
+            assert(#entries == 2 and entries[2].name == "nested/data.bin" and entries[2].kind == "file")
+            local destination = root .. "/destination"
+            fs.copyDir(source, destination)
+            assert(fs.readFile(destination .. "/nested/data.bin") == "A\0BC")
+    )lua"},
+            {"chmod (readOnly / file)", R"lua(
+            fs.chmod(moved, fs.modes.readOnly)
+            assert(fs.stat(moved).mode % 512 == fs.modes.readOnly)
+            fs.chmod(moved, fs.modes.file)
+            assert(fs.stat(moved).mode % 512 == fs.modes.file)
+    )lua"},
+            {"symlink", R"lua(
+            local link = root .. "/link"
+            if pcall(fs.symlink, moved, link) then
+                assert(fs.isSymlink(link) and fs.readLink(link) == moved)
+                assert(fs.stat(link).kind == "file" and fs.lstat(link).kind == "symlink")
+            end
+    )lua"},
+            {"cwd / chdir / tempDir", R"lua(
+            local originalCwd = fs.cwd()
+            fs.chdir(root)
+            local cwdOk, cwdErr = pcall(function() assert(fs.cwd() == root) end)
+            fs.chdir(originalCwd)
+            assert(cwdOk, cwdErr)
+            assert(fs.tempDir() ~= "" and not fs.isFile(root .. "/missing"))
+    )lua"},
+            {"removeFile / removeDir", R"lua(
+            fs.removeFile(moved)
+            fs.removeDir(root, true)
+            assert(not fs.exists(root))
+    )lua"},
+        };
+
+        std::string script = header;
+        for (const Step &step : steps) {
+            script += step.body;
+            Exec exec(script.c_str());
+            CHECK_MESSAGE(exec.getStatus() == 0,
+                          "FAILED after step: " << step.name);
+        }
+
+        const std::string privateScript = header + steps[0].body +
+                                          steps[1].body + steps[2].body +
+                                          R"lua(
+            fs.chmod(moved, fs.modes.private)
+            assert(fs.stat(moved).mode % 512 == fs.modes.private)
+    )lua";
+        Exec original(privateScript.c_str());
+#ifdef _WIN32
+        CHECK_MESSAGE(original.getStatus() != 0,
+                      "0600 round-trip unexpectedly WORKS on Windows; the old "
+                      "assertion is not the problem");
+#else
+        CHECK_MESSAGE(original.getStatus() == 0,
+                      "0600 round-trip failed on a POSIX platform");
+#endif
+    }
+
+    TEST_CASE("Builtin path library covers both lexical path styles") {
+        Exec exec(R"(
         local path = require("@sonata/path")
         local p = path.posix
         assert(path.version == 1 and p.version == 1 and path.win32.version == 1)
@@ -103,11 +198,11 @@ TEST_CASE("Builtin path library covers both lexical path styles") {
         assert(p.joinList({ "/bin", "/usr/bin" }) == "/bin:/usr/bin")
         assert(type(p.resolve("src", "../lib")) == "string")
     )");
-    REQUIRE(exec.getStatus() == 0);
-}
+        REQUIRE(exec.getStatus() == 0);
+    }
 
-TEST_CASE("Builtin json library parses, encodes, and modifies values") {
-    Exec exec(R"(
+    TEST_CASE("Builtin json library parses, encodes, and modifies values") {
+        Exec exec(R"(
         local json = require("@sonata/json")
         assert(json.version == 1 and json.null ~= nil)
         local value = json.decode('{"a":[1,2,{"b":null}],"z":true}')
@@ -127,11 +222,11 @@ TEST_CASE("Builtin json library parses, encodes, and modifies values") {
         assert(value.new == nil and value.added == 3)
         assert(json.encode(json.array()) == "[]" and json.encode(json.object()) == "{}")
     )");
-    REQUIRE(exec.getStatus() == 0);
-}
+        REQUIRE(exec.getStatus() == 0);
+    }
 
-TEST_CASE("Builtin sys library reports machine facts and clocks") {
-    Exec exec(R"(
+    TEST_CASE("Builtin sys library reports machine facts and clocks") {
+        Exec exec(R"(
         local sys = require("@sonata/sys")
         assert(sys.eol == "\n" or sys.eol == "\r\n")
         assert(sys.pathSeparator == "/" or sys.pathSeparator == "\\")
@@ -155,11 +250,11 @@ TEST_CASE("Builtin sys library reports machine facts and clocks") {
         assert(sys.freeMemory() == nil or sys.freeMemory() >= 0)
         assert(sys.uptime() == nil or sys.uptime() >= 0)
     )");
-    REQUIRE(exec.getStatus() == 0);
-}
+        REQUIRE(exec.getStatus() == 0);
+    }
 
-TEST_CASE("Builtin task library starts, queues, and cancels work") {
-    Exec exec(R"(
+    TEST_CASE("Builtin task library starts, queues, and cancels work") {
+        Exec exec(R"(
         local task = require("@sonata/task")
         local called = 0
         local thread = task.spawn(function(value) called = value end, 7)
@@ -173,11 +268,11 @@ TEST_CASE("Builtin task library starts, queues, and cancels work") {
         local ok = pcall(task.wait, 0)
         assert(not ok)
     )");
-    REQUIRE(exec.getStatus() == 0);
-}
+        REQUIRE(exec.getStatus() == 0);
+    }
 
-TEST_CASE("Builtin process library exposes process state and environment") {
-    Exec exec(R"(
+    TEST_CASE("Builtin process library exposes process state and environment") {
+        Exec exec(R"(
         local process = require("@sonata/process")
         assert(type(process.os) == "string" and type(process.arch) == "string")
         assert(process.endianness == "little" or process.endianness == "big")
@@ -197,11 +292,11 @@ TEST_CASE("Builtin process library exposes process state and environment") {
         process.env.SONATA_BUILTIN_TEST_VALUE = previous
         assert(type(process.exec) == "function" and type(process.exit) == "function")
     )");
-    REQUIRE(exec.getStatus() == 0);
-}
+        REQUIRE(exec.getStatus() == 0);
+    }
 
-TEST_CASE("Builtin stdio library writes and describes streams") {
-    Exec exec(R"(
+    TEST_CASE("Builtin stdio library writes and describes streams") {
+        Exec exec(R"(
         local stdio = require("@sonata/stdio")
         assert(stdio.stdin ~= nil and stdio.stdout ~= nil and stdio.stderr ~= nil)
         assert(type(stdio.stdin:isTerminal()) == "boolean")
@@ -216,12 +311,13 @@ TEST_CASE("Builtin stdio library writes and describes streams") {
         assert(not pcall(function() stdio.stdout:read(1) end))
         assert(type(stdio.prompt) == "function")
     )");
-    REQUIRE(exec.getStatus() == 0);
-    CHECK(exec.getOutput() == "stdio-ok\n");
-}
+        REQUIRE(exec.getStatus() == 0);
+        CHECK(exec.getOutput() == "stdio-ok\n");
+    }
 
-TEST_CASE("Builtin net library parses URLs and exchanges loopback traffic") {
-    Exec exec(R"(
+    TEST_CASE(
+        "Builtin net library parses URLs and exchanges loopback traffic") {
+        Exec exec(R"(
         local net = require("@sonata/net")
         assert(net.version == 1)
         local url = net.url.parse("https://u:p@Host:8443/a/b?x=1#top")
@@ -267,11 +363,11 @@ TEST_CASE("Builtin net library parses URLs and exchanges loopback traffic") {
         sender:close()
         receiver:close()
     )");
-    REQUIRE(exec.getStatus() == 0);
-}
+        REQUIRE(exec.getStatus() == 0);
+    }
 
-TEST_CASE("Builtin crypto library hashes, encodes, encrypts, and signs") {
-    Exec exec(R"(
+    TEST_CASE("Builtin crypto library hashes, encodes, encrypts, and signs") {
+        Exec exec(R"(
         local crypto = require("@sonata/crypto")
         assert(crypto.version == 1 and type(crypto.hardwareAes) == "boolean")
         assert(#crypto.hashes > 0 and #crypto.ciphers > 0)
@@ -310,11 +406,12 @@ TEST_CASE("Builtin crypto library hashes, encodes, encrypts, and signs") {
         local sealed = crypto.seal(publicA, "sealed message")
         assert(crypto.open(privateA, sealed) == "sealed message")
     )");
-    REQUIRE(exec.getStatus() == 0);
-}
+        REQUIRE(exec.getStatus() == 0);
+    }
 
-TEST_CASE("Builtin datetime library converts, parses, and performs calendar arithmetic") {
-    Exec exec(R"(
+    TEST_CASE("Builtin datetime library converts, parses, and performs "
+              "calendar arithmetic") {
+        Exec exec(R"(
         local datetime = require("@sonata/datetime")
         assert(datetime.version == 1)
         local t, nsec = datetime.fromFields({ year = 2024, month = 2, day = 29, hour = 12, min = 34, sec = 56, nsec = 123456789 }, "UTC")
@@ -341,7 +438,6 @@ TEST_CASE("Builtin datetime library converts, parses, and performs calendar arit
         local invalid = datetime.parse("not a date")
         assert(invalid == nil)
     )");
-    REQUIRE(exec.getStatus() == 0);
-}
-
+        REQUIRE(exec.getStatus() == 0);
+    }
 }
