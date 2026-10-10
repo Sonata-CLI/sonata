@@ -351,7 +351,7 @@ constexpr u8 kBlakeSigma[10][16] = {
 // BLAKE2b (W = u64, 64-byte digest) and BLAKE2s (W = u32, 32-byte digest), unkeyed.
 template <class W> struct Blake2 : Hasher {
     static constexpr bool kWide = sizeof(W) == 8;
-    static constexpr size_t BS = sizeof(W) * 16, OUT = sizeof(W) * 8;
+    static constexpr size_t BS = sizeof(W) * 16, kOut = sizeof(W) * 8;
     W h[8];
     u64 t = 0;
     u8 buf[BS];
@@ -359,7 +359,7 @@ template <class W> struct Blake2 : Hasher {
     static W iv(int i) { return kWide ? W(kIV[i]) : W(kIV[i] >> 32); }
     Blake2() {
         for (int i = 0; i < 8; ++i) h[i] = iv(i);
-        h[0] ^= W(0x01010000 ^ OUT);
+        h[0] ^= W(0x01010000 ^ kOut);
     }
     void compress(bool last) {
         W v[16], m[16];
@@ -396,7 +396,7 @@ template <class W> struct Blake2 : Hasher {
         t += n;
         std::memset(buf + n, 0, BS - n);
         compress(true);
-        for (size_t i = 0; i < OUT / sizeof(W); ++i) ST<W>(out + i * sizeof(W), h[i], false);
+        for (size_t i = 0; i < kOut / sizeof(W); ++i) ST<W>(out + i * sizeof(W), h[i], false);
     }
 };
 
