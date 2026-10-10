@@ -51,8 +51,27 @@
 //     fs.chdir(path)
 //     fs.tempDir()                           --> the system temp directory
 //     fs.makeTempDir(prefix?)                --> a new, empty, private directory inside it
+//
+// Same behavior on every OS
+//     Paths you pass in may use "/" everywhere (Windows also accepts a backslash).
+//     Paths this library returns (realPath, cwd, tempDir, makeTempDir, readLink)
+//     always use "/", so they can be joined with "/" and compared as strings.
+//     Windows keeps its drive letter ("C:/Users/me"); nothing can hide that.
+//     Error messages use the same wording on every OS whenever the OS has a
+//     portable name for the error ("no such file or directory", "permission
+//     denied", ...). Do not parse anything beyond that.
+//     removeFile / removeDir delete read-only entries on Windows too, like POSIX.
+//
+// Permissions on Windows
+//     Windows has no permission bits, only a read-only attribute. chmod looks at
+//     the owner-write bit (0200) only: set -> writable, clear -> read-only.
+//     stat().mode is derived from that attribute: 0644 / 0444 for files and
+//     0755 / 0555 for directories. Execute, group and other bits are ignored, so
+//     chmod(p, fs.modes.private) reads back as 0644 on Windows. fs.modes.file
+//     and fs.modes.readOnly round-trip on every OS.
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
@@ -129,15 +148,28 @@ std::string quote(std::string_view from, std::string_view to) {
     return quote(from) + " -> " + quote(to);
 }
 
+// Error text that reads the same on every OS. Mapping to the portable condition
+// (ENOENT, EACCES, ...) makes Windows say "no such file or directory" instead of a
+// localized Win32 message; lower-casing the first letter reconciles glibc/macOS
+// ("No such file or directory") with MSVC ("no such file or directory").
+std::string describe(const std::error_code& ec) {
+    std::string text = ec.default_error_condition().message();
+    if (text.size() > 1 && std::isupper(static_cast<unsigned char>(text[0])) &&
+        std::islower(static_cast<unsigned char>(text[1]))) {
+        text[0] = static_cast<char>(std::tolower(static_cast<unsigned char>(text[0])));
+    }
+    return text;
+}
+
 std::string reasonOf(std::errc code) {
-    return std::make_error_code(code).message();
+    return describe(std::make_error_code(code));
 }
 
 std::string errnoReason(int error) {
     if (error == 0) {
         return "operation failed";
     }
-    return std::error_code(error, std::generic_category()).message();
+    return describe(std::error_code(error, std::generic_category()));
 }
 
 std::string_view checkPath(lua_State* L, int arg) {
@@ -206,6 +238,19 @@ std::string toGenericUtf8(const stdfs::path& p) {
 #endif
 }
 
+// Paths handed back to Lua always use "/" (see the header comment).
+void pushPath(lua_State* L, const stdfs::path& p) {
+    pushString(L, toGenericUtf8(p));
+}
+
+// Drops a trailing separator ("/var/T/" -> "/var/T", "C:/Temp/" -> "C:/Temp"); roots stay.
+stdfs::path withoutTrailingSeparator(const stdfs::path& p) {
+    if (!p.has_filename() && p.has_relative_path()) {
+        return p.parent_path();
+    }
+    return p;
+}
+
 const char* kindOf(const stdfs::file_status& status) {
     switch (status.type()) {
     case stdfs::file_type::regular:
@@ -218,6 +263,44 @@ const char* kindOf(const stdfs::file_status& status) {
         return "other";
     }
 }
+
+// Permission bits as reported by stat(). POSIX reports what the filesystem
+// stores. Windows only has a read-only attribute, and the standard library
+// reports it differently from one implementation to the next, so build the
+// answer from that one bit.
+unsigned modeOf(const stdfs::file_status& status) {
+#ifdef _WIN32
+    const bool writable =
+        (status.permissions() & stdfs::perms::owner_write) != stdfs::perms::none;
+    if (status.type() == stdfs::file_type::directory) {
+        return writable ? 0755 : 0555;
+    }
+    return writable ? 0644 : 0444;
+#else
+    return static_cast<unsigned>(status.permissions() & stdfs::perms::mask);
+#endif
+}
+
+#ifdef _WIN32
+// POSIX lets you delete a read-only file; Windows refuses while the read-only
+// attribute is set. Used only to retry after a "permission denied".
+void clearReadOnly(const stdfs::path& path) {
+    std::error_code ignored;
+    stdfs::permissions(path, stdfs::perms::owner_write, stdfs::perm_options::add, ignored);
+}
+
+void clearReadOnlyTree(const stdfs::path& dir) {
+    clearReadOnly(dir);
+    std::error_code ec;
+    for (stdfs::recursive_directory_iterator it(dir, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        std::error_code linkEc;
+        if (!it->is_symlink(linkEc)) { // never touch a link's target
+            clearReadOnly(it->path());
+        }
+    }
+}
+#endif
 
 double toUnixSeconds(stdfs::file_time_type time) {
     // C++17 has no portable file_clock -> system_clock conversion; measure the
@@ -305,7 +388,7 @@ int copyFileImpl(lua_State* L, std::string_view fromText, std::string_view toTex
                      overwrite ? stdfs::copy_options::overwrite_existing : stdfs::copy_options::none,
                      ec);
     if (ec) {
-        return fail(L, "copyFile", quote(fromText, toText), ec.message());
+        return fail(L, "copyFile", quote(fromText, toText), describe(ec));
     }
     return 0;
 }
@@ -319,15 +402,22 @@ int removeFileImpl(lua_State* L, std::string_view pathText) {
         return fail(L, "removeFile", quote(pathText), reasonOf(std::errc::no_such_file_or_directory));
     }
     if (ec) {
-        return fail(L, "removeFile", quote(pathText), ec.message());
+        return fail(L, "removeFile", quote(pathText), describe(ec));
     }
     if (stdfs::is_directory(status)) {
         return fail(L, "removeFile", quote(pathText), reasonOf(std::errc::is_a_directory));
     }
 
     stdfs::remove(path, ec);
+#ifdef _WIN32
+    if (ec == std::errc::permission_denied && !stdfs::is_symlink(status)) {
+        clearReadOnly(path);
+        ec.clear();
+        stdfs::remove(path, ec);
+    }
+#endif
     if (ec) {
-        return fail(L, "removeFile", quote(pathText), ec.message());
+        return fail(L, "removeFile", quote(pathText), describe(ec));
     }
     return 0;
 }
@@ -342,7 +432,7 @@ int moveImpl(lua_State* L, std::string_view fromText, std::string_view toText) {
         return 0;
     }
     if (ec != std::errc::cross_device_link) {
-        return fail(L, "move", quote(fromText, toText), ec.message());
+        return fail(L, "move", quote(fromText, toText), describe(ec));
     }
 
     // Different filesystems: copy, then delete the source.
@@ -355,11 +445,11 @@ int moveImpl(lua_State* L, std::string_view fromText, std::string_view toText) {
                     stdfs::copy_options::overwrite_existing,
                 ec);
     if (ec) {
-        return fail(L, "move", quote(fromText, toText), ec.message());
+        return fail(L, "move", quote(fromText, toText), describe(ec));
     }
     stdfs::remove_all(from, ec);
     if (ec) {
-        return fail(L, "move", quote(fromText, toText), ec.message());
+        return fail(L, "move", quote(fromText, toText), describe(ec));
     }
     return 0;
 }
@@ -376,14 +466,14 @@ int makeDirImpl(lua_State* L, std::string_view pathText, bool recursive) {
             return fail(L, "makeDir", quote(pathText), reasonOf(std::errc::not_a_directory));
         }
         if (ec) {
-            return fail(L, "makeDir", quote(pathText), ec.message());
+            return fail(L, "makeDir", quote(pathText), describe(ec));
         }
         return 0;
     }
 
     const bool created = stdfs::create_directory(path, ec);
     if (ec) {
-        return fail(L, "makeDir", quote(pathText), ec.message());
+        return fail(L, "makeDir", quote(pathText), describe(ec));
     }
     if (!created) {
         return fail(L, "makeDir", quote(pathText), reasonOf(std::errc::file_exists));
@@ -405,20 +495,34 @@ int removeDirImpl(lua_State* L, std::string_view pathText, bool recursive) {
         return fail(L, "removeDir", quote(pathText), reasonOf(std::errc::no_such_file_or_directory));
     }
     if (ec) {
-        return fail(L, "removeDir", quote(pathText), ec.message());
+        return fail(L, "removeDir", quote(pathText), describe(ec));
     }
     // A symlink to a directory is not a directory here: it is never followed.
     if (!stdfs::is_directory(status)) {
         return fail(L, "removeDir", quote(pathText), reasonOf(std::errc::not_a_directory));
     }
 
-    if (recursive) {
-        stdfs::remove_all(path, ec);
-    } else {
-        stdfs::remove(path, ec);
+    const auto attempt = [&] {
+        ec.clear();
+        if (recursive) {
+            stdfs::remove_all(path, ec);
+        } else {
+            stdfs::remove(path, ec);
+        }
+    };
+    attempt();
+#ifdef _WIN32
+    if (ec == std::errc::permission_denied) {
+        if (recursive) {
+            clearReadOnlyTree(path);
+        } else {
+            clearReadOnly(path);
+        }
+        attempt();
     }
+#endif
     if (ec) {
-        return fail(L, "removeDir", quote(pathText), ec.message());
+        return fail(L, "removeDir", quote(pathText), describe(ec));
     }
     return 0;
 }
@@ -471,7 +575,7 @@ int listDirImpl(lua_State* L, const char* op, std::string_view pathText, bool re
 
     std::vector<Entry> entries;
     if (!collectEntries(path, recursive, entries, ec)) {
-        return fail(L, op, quote(pathText), ec.message());
+        return fail(L, op, quote(pathText), describe(ec));
     }
 
     lua_createtable(L, static_cast<int>(entries.size()), 0);
@@ -500,11 +604,11 @@ int copyDirImpl(lua_State* L, std::string_view fromText, std::string_view toText
     // Copying a directory into itself would never end.
     const stdfs::path source = stdfs::weakly_canonical(from, ec);
     if (ec) {
-        return fail(L, "copyDir", quote(fromText, toText), ec.message());
+        return fail(L, "copyDir", quote(fromText, toText), describe(ec));
     }
     const stdfs::path target = stdfs::weakly_canonical(to, ec);
     if (ec) {
-        return fail(L, "copyDir", quote(fromText, toText), ec.message());
+        return fail(L, "copyDir", quote(fromText, toText), describe(ec));
     }
     const stdfs::path relation = target.lexically_relative(source);
     if (!relation.empty() && *relation.begin() != stdfs::path("..")) {
@@ -518,7 +622,7 @@ int copyDirImpl(lua_State* L, std::string_view fromText, std::string_view toText
     }
     stdfs::copy(from, to, options, ec);
     if (ec) {
-        return fail(L, "copyDir", quote(fromText, toText), ec.message());
+        return fail(L, "copyDir", quote(fromText, toText), describe(ec));
     }
     return 0;
 }
@@ -527,9 +631,9 @@ int tempDirImpl(lua_State* L) {
     std::error_code ec;
     const stdfs::path dir = stdfs::temp_directory_path(ec);
     if (ec) {
-        return fail(L, "tempDir", "", ec.message());
+        return fail(L, "tempDir", "", describe(ec));
     }
-    pushString(L, toUtf8(dir));
+    pushPath(L, withoutTrailingSeparator(dir));
     return 1;
 }
 
@@ -537,7 +641,7 @@ int makeTempDirImpl(lua_State* L, std::string_view prefix) {
     std::error_code ec;
     const stdfs::path base = stdfs::temp_directory_path(ec);
     if (ec) {
-        return fail(L, "makeTempDir", "", ec.message());
+        return fail(L, "makeTempDir", "", describe(ec));
     }
 
     static const char kDigits[] = "0123456789abcdef";
@@ -554,11 +658,11 @@ int makeTempDirImpl(lua_State* L, std::string_view prefix) {
         const stdfs::path candidate = base / toPath(name);
         if (stdfs::create_directory(candidate, ec)) {
             stdfs::permissions(candidate, stdfs::perms::owner_all, ec); // best effort: 0700
-            pushString(L, toUtf8(candidate));
+            pushPath(L, candidate);
             return 1;
         }
         if (ec) {
-            return fail(L, "makeTempDir", quote(toUtf8(candidate)), ec.message());
+            return fail(L, "makeTempDir", quote(toUtf8(candidate)), describe(ec));
         }
         // The name was taken: try another one.
     }
@@ -569,9 +673,9 @@ int cwdImpl(lua_State* L) {
     std::error_code ec;
     const stdfs::path dir = stdfs::current_path(ec);
     if (ec) {
-        return fail(L, "cwd", "", ec.message());
+        return fail(L, "cwd", "", describe(ec));
     }
-    pushString(L, toUtf8(dir));
+    pushPath(L, dir);
     return 1;
 }
 
@@ -579,7 +683,7 @@ int chdirImpl(lua_State* L, std::string_view pathText) {
     std::error_code ec;
     stdfs::current_path(toPath(pathText), ec);
     if (ec) {
-        return fail(L, "chdir", quote(pathText), ec.message());
+        return fail(L, "chdir", quote(pathText), describe(ec));
     }
     return 0;
 }
@@ -596,7 +700,7 @@ int statImpl(lua_State* L, const char* op, std::string_view pathText, bool follo
         return fail(L, op, quote(pathText), reasonOf(std::errc::no_such_file_or_directory));
     }
     if (ec) {
-        return fail(L, op, quote(pathText), ec.message());
+        return fail(L, op, quote(pathText), describe(ec));
     }
 
     double size = 0;
@@ -619,8 +723,7 @@ int statImpl(lua_State* L, const char* op, std::string_view pathText, bool follo
     setStringField(L, "kind", kindOf(status));
     setNumberField(L, "size", size);
     setNumberField(L, "modified", modified);
-    setNumberField(L, "mode", static_cast<double>(static_cast<unsigned>(status.permissions() &
-                                                                         stdfs::perms::mask)));
+    setNumberField(L, "mode", static_cast<double>(modeOf(status)));
     return 1;
 }
 
@@ -628,15 +731,19 @@ int realPathImpl(lua_State* L, std::string_view pathText) {
     std::error_code ec;
     const stdfs::path resolved = stdfs::canonical(toPath(pathText), ec);
     if (ec) {
-        return fail(L, "realPath", quote(pathText), ec.message());
+        return fail(L, "realPath", quote(pathText), describe(ec));
     }
-    pushString(L, toUtf8(resolved));
+    pushPath(L, resolved);
     return 1;
 }
 
 int symlinkImpl(lua_State* L, std::string_view targetText, std::string_view linkText) {
-    const stdfs::path target = toPath(targetText);
+    stdfs::path target = toPath(targetText);
     const stdfs::path link = toPath(linkText);
+#ifdef _WIN32
+    // Windows stores a relative target verbatim and does not understand "/" in it.
+    target.make_preferred();
+#endif
 
     // Windows distinguishes links to directories from links to files.
     std::error_code ec;
@@ -649,7 +756,7 @@ int symlinkImpl(lua_State* L, std::string_view targetText, std::string_view link
         stdfs::create_symlink(target, link, ec);
     }
     if (ec) {
-        return fail(L, "symlink", quote(linkText, targetText), ec.message());
+        return fail(L, "symlink", quote(linkText, targetText), describe(ec));
     }
     return 0;
 }
@@ -658,17 +765,23 @@ int readLinkImpl(lua_State* L, std::string_view pathText) {
     std::error_code ec;
     const stdfs::path target = stdfs::read_symlink(toPath(pathText), ec);
     if (ec) {
-        return fail(L, "readLink", quote(pathText), ec.message());
+        return fail(L, "readLink", quote(pathText), describe(ec));
     }
-    pushString(L, toUtf8(target));
+    pushPath(L, target);
     return 1;
 }
 
 int chmodImpl(lua_State* L, std::string_view pathText, int mode) {
+    stdfs::perms requested = static_cast<stdfs::perms>(mode);
+#ifdef _WIN32
+    // Only the read-only attribute exists: owner-write set -> writable, else read-only.
+    requested = (mode & 0200) != 0 ? (stdfs::perms::owner_read | stdfs::perms::owner_write)
+                                   : stdfs::perms::owner_read;
+#endif
     std::error_code ec;
-    stdfs::permissions(toPath(pathText), static_cast<stdfs::perms>(mode), ec);
+    stdfs::permissions(toPath(pathText), requested, ec);
     if (ec) {
-        return fail(L, "chmod", quote(pathText), ec.message());
+        return fail(L, "chmod", quote(pathText), describe(ec));
     }
     return 0;
 }
